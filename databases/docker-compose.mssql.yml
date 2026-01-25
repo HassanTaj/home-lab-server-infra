@@ -1,0 +1,25 @@
+name: "databases"
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: 'mssql'  # 👈 this is the actual hostname now
+    environment:
+      SA_PASSWORD: "YourStrong!Passw0rd"
+      ACCEPT_EULA: "Y"
+      MSSQL_ENABLE_HADR: "0"
+      MSSQL_TCP_ENABLED: "1"
+      MSSQL_TLS_ENABLED: "1"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    networks:
+      mssql-network:
+        aliases:
+          - mssql  # 👈 optional: lets you use Server=mssql in connection strings
+
+volumes:
+  mssql-data:
+
+networks:
+  mssql-network:
+    name: mssql-network
+    external: false  # 👈 match app's network

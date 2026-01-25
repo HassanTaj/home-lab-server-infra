@@ -1,0 +1,25 @@
+name: homearpa
+
+networks:
+  proxy:
+    external: true
+
+services:
+  portainer:
+    image: portainer/portainer-ce
+    container_name: portainer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/portainer:/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.portainer.rule=Host(`portainer.home.arpa`)
+      - traefik.http.routers.portainer.entrypoints=websecure
+      - traefik.http.routers.portainer.tls=true
+      - traefik.http.services.portainer.loadbalancer.server.port=9000
+    networks:
+      - proxy
+    restart: unless-stopped
+
+# docker compose -f docker-compose.portainer.yml up -d
+# curl -vk https://portainer.home.arpa

@@ -1,0 +1,24 @@
+name: homearpa
+
+networks:
+  proxy:
+    external: true
+
+services:
+  kuma:
+    image: louislam/uptime-kuma
+    container_name: uptime-kuma
+    volumes:
+      - ./data/kuma:/app/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.kuma.rule=Host(`status.home.arpa`)
+      - traefik.http.routers.kuma.entrypoints=websecure
+      - traefik.http.routers.kuma.tls=true
+      - traefik.http.services.kuma.loadbalancer.server.port=3001
+    networks:
+      - proxy
+    restart: unless-stopped
+
+# docker compose -f docker-compose.kuma.yml up -d
+# https://status.home.arpa
