@@ -59,14 +59,14 @@ The stack is intentionally **split into multiple Compose files** so each service
 
 ```mermaid
 graph TD
-    A[Clients<br>(Windows/Linux/Android)] --> B[DNS Query<br>(* .home.arpa)]
-    B --> C[CoreDNS<br>(Resolves to 192.168.0.135)]
-    C --> D[Traefik<br>(Reverse Proxy & HTTPS)]
-    D --> E[Portainer<br>(portainer.home.arpa)]
-    D --> F[Nextcloud<br>(nextcloud.home.arpa)]
-    D --> G[n8n<br>(n8n.home.arpa)]
-    D --> H[Uptime Kuma<br>(status.home.arpa)]
-    D --> I[WireGuard<br>(VPN Access)]
+    A[Clients Windows/Linux/Android] --> B[DNS Query *.home.arpa]
+    B --> C[CoreDNS 192.168.0.135]
+    C --> D[Traefik Reverse Proxy HTTPS]
+    D --> E[Portainer portainer.home.arpa]
+    D --> F[Nextcloud nextcloud.home.arpa]
+    D --> G[n8n n8n.home.arpa]
+    D --> H[Uptime Kuma status.home.arpa]
+    D --> I[WireGuard VPN Access]
 ```
 
 ## 🎯 Goals
@@ -174,11 +174,11 @@ tls:
 
 ```mermaid
 flowchart TD
-    A[Client Request<br>(e.g., https://portainer.home.arpa)] --> B[EntryPoint<br>(websecure:443)]
-    B --> C[Providers<br>(Docker + File)]
-    C --> D[Router<br>(Matches domain)]
-    D --> E[Service<br>(Portainer Container)]
-    E --> F[Response<br>(via Internal Network)]
+    A[Client Request https://portainer.home.arpa] --> B[EntryPoint websecure 443]
+    B --> C[Providers Docker + File]
+    C --> D[Router Matches domain]
+    D --> E[Service Portainer Container]
+    E --> F[Response via Internal Network]
 ```
 
 ## 🧭 CoreDNS (Local DNS)
@@ -206,7 +206,7 @@ home.arpa:53 {
 ```mermaid
 sequenceDiagram
     participant Client
-    participant systemd_resolved as systemd-resolved
+    participant systemd_resolved
     participant CoreDNS
     Client->>systemd_resolved: Query *.home.arpa
     systemd_resolved->>CoreDNS: Forward to 127.0.0.1:53
