@@ -59,14 +59,14 @@ The stack is intentionally **split into multiple Compose files** so each service
 
 ```mermaid
 graph TD
-    A[Clients\n(Windows/Linux/Android)] --> B[DNS Query\n(*.home.arpa)]
-    B --> C[CoreDNS\n(Resolves to 192.168.0.135)]
-    C --> D[Traefik\n(Reverse Proxy & HTTPS)]
-    D --> E[Portainer\n(portainer.home.arpa)]
-    D --> F[Nextcloud\n(nextcloud.home.arpa)]
-    D --> G[n8n\n(n8n.home.arpa)]
-    D --> H[Uptime Kuma\n(status.home.arpa)]
-    D --> I[WireGuard\n(VPN Access)]
+    A[Clients<br>(Windows/Linux/Android)] --> B[DNS Query<br>(* .home.arpa)]
+    B --> C[CoreDNS<br>(Resolves to 192.168.0.135)]
+    C --> D[Traefik<br>(Reverse Proxy & HTTPS)]
+    D --> E[Portainer<br>(portainer.home.arpa)]
+    D --> F[Nextcloud<br>(nextcloud.home.arpa)]
+    D --> G[n8n<br>(n8n.home.arpa)]
+    D --> H[Uptime Kuma<br>(status.home.arpa)]
+    D --> I[WireGuard<br>(VPN Access)]
 ```
 
 ## 🎯 Goals
@@ -174,11 +174,11 @@ tls:
 
 ```mermaid
 flowchart TD
-    A[Client Request\n(e.g., https://portainer.home.arpa)] --> B[EntryPoint\n(websecure:443)]
-    B --> C[Providers\n(Docker + File)]
-    C --> D[Router\n(Matches domain)]
-    D --> E[Service\n(Portainer Container)]
-    E --> F[Response\n(via Internal Network)]
+    A[Client Request<br>(e.g., https://portainer.home.arpa)] --> B[EntryPoint<br>(websecure:443)]
+    B --> C[Providers<br>(Docker + File)]
+    C --> D[Router<br>(Matches domain)]
+    D --> E[Service<br>(Portainer Container)]
+    E --> F[Response<br>(via Internal Network)]
 ```
 
 ## 🧭 CoreDNS (Local DNS)
@@ -206,12 +206,12 @@ home.arpa:53 {
 ```mermaid
 sequenceDiagram
     participant Client
-    participant systemd-resolved
+    participant systemd_resolved as systemd-resolved
     participant CoreDNS
-    Client->>systemd-resolved: Query *.home.arpa
-    systemd-resolved->>CoreDNS: Forward to 127.0.0.1:53
-    CoreDNS->>systemd-resolved: Resolve to 192.168.0.135
-    systemd-resolved->>Client: Return IP
+    Client->>systemd_resolved: Query *.home.arpa
+    systemd_resolved->>CoreDNS: Forward to 127.0.0.1:53
+    CoreDNS->>systemd_resolved: Resolve to 192.168.0.135
+    systemd_resolved->>Client: Return IP
 ```
 
 ## 🧠 systemd‑resolved Configuration
