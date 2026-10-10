@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Home Lab Demo</title>
+<meta name="description" content="Self-hosted files, media and photos with local LAN and encrypted remote access.">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#09090b">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  --bg:#09090b; --bg-soft:#0f0f12; --card:#121216; --card-hover:#17171c;
+  --line:#26262c; --line-soft:#1c1c21;
+  --fg:#fafafa; --muted:#a1a1aa; --dim:#71717a;
+  --accent:#6ee7b7; --accent-dim:#34d399; --glow:rgba(110,231,183,.10);
+  --radius:14px;
+}
+@media (prefers-color-scheme:light){
+  :root:not([data-theme="dark"]){
+    --bg:#fafafa; --bg-soft:#f4f4f5; --card:#fff; --card-hover:#fff;
+    --line:#e4e4e7; --line-soft:#ececef;
+    --fg:#09090b; --muted:#52525b; --dim:#71717a;
+    --accent:#059669; --accent-dim:#047857; --glow:rgba(5,150,105,.08);
+  }
+}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--bg); color:var(--fg); min-height:100vh;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Inter,"Helvetica Neue",Arial,sans-serif;
+  line-height:1.6; -webkit-font-smoothing:antialiased;
+  display:flex; flex-direction:column;
+}
+/* soft radial wash behind the hero */
+body::before{
+  content:""; position:fixed; inset:0 0 auto 0; height:60vh; pointer-events:none; z-index:0;
+  background:radial-gradient(70% 100% at 50% 0%,var(--glow),transparent 70%);
+}
+.wrap{width:100%; max-width:60rem; margin:0 auto; padding:0 1.5rem; position:relative; z-index:1}
+header{padding:5.5rem 0 0}
+.badge{
+  display:inline-flex; align-items:center; gap:.5rem;
+  font-size:.75rem; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+  border:1px solid var(--line); background:var(--bg-soft);
+  padding:.375rem .75rem; border-radius:999px;
+}
+.dot{width:.45rem;height:.45rem;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--glow)}
+h1{
+  font-size:clamp(2.1rem,6vw,3.4rem); line-height:1.08; letter-spacing:-.03em;
+  margin:1.5rem 0 0; font-weight:650;
+}
+h1 .thin{color:var(--dim); font-weight:400}
+.lede{margin:1.1rem 0 0; max-width:34rem; color:var(--muted); font-size:1.05rem}
+main{flex:1; padding:3.5rem 0 0}
+h2{
+  font-size:.75rem; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--dim); font-weight:600; margin:0 0 1.1rem;
+}
+.grid{display:grid; gap:1rem; grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{
+  display:flex; flex-direction:column; gap:.4rem;
+  border:1px solid var(--line); background:var(--card);
+  border-radius:var(--radius); padding:1.35rem; text-decoration:none; color:inherit;
+  transition:border-color .18s ease, background .18s ease, transform .18s ease;
+}
+a.card:hover,a.card:focus-visible{
+  border-color:var(--accent-dim); background:var(--card-hover);
+  transform:translateY(-2px); outline:none;
+}
+a.card:focus-visible{box-shadow:0 0 0 3px var(--glow)}
+.card .top{display:flex; align-items:center; justify-content:space-between; gap:.75rem}
+.card .name{font-weight:600; font-size:1.05rem; letter-spacing:-.01em}
+.card .desc{color:var(--muted); font-size:.9rem}
+.card .host{
+  margin-top:.55rem; font-size:.78rem; color:var(--dim);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; word-break:break-all;
+}
+.icon{font-size:1.35rem; line-height:1}
+.arrow{color:var(--dim); transition:transform .18s ease, color .18s ease}
+a.card:hover .arrow{transform:translateX(3px); color:var(--accent)}
+.tag{
+  font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:var(--dim);
+  border:1px solid var(--line); border-radius:999px; padding:.15rem .5rem; white-space:nowrap;
+}
+.route-grid{display:grid; gap:1rem; grid-template-columns:repeat(auto-fit,minmax(15.5rem,1fr)); margin-top:.5rem}
+.route-card{
+  border:1px solid var(--line); background:var(--card);
+  border-radius:var(--radius); padding:1.35rem;
+}
+.route-card .route-label{
+  display:flex; align-items:center; gap:.55rem;
+  color:var(--muted); font-size:.75rem; letter-spacing:.08em; text-transform:uppercase;
+}
+.route-card h3{margin:1rem 0 .35rem; font-size:1.08rem; letter-spacing:-.01em}
+.route-card p{margin:0; color:var(--muted); font-size:.9rem}
+.route-path{display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; margin-top:1rem; font-size:.78rem}
+.route-path span:not(.arrow){
+  border:1px solid var(--line); background:var(--bg-soft);
+  border-radius:999px; padding:.2rem .55rem; color:var(--fg);
+}
+.route-path .arrow{color:var(--accent); font-weight:600}
+.route-card .route-host{
+  display:block; margin-top:.85rem; color:var(--dim); font-size:.76rem;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+.route-caption{margin:1rem 0 0; color:var(--dim); font-size:.83rem}
+.dot.remote{background:#93c5fd;box-shadow:0 0 0 3px rgba(147,197,253,.10)}
+.routes{margin-top:3rem}
+.note{
+  margin:2.5rem 0 0; border:1px solid var(--line-soft); background:var(--bg-soft);
+  border-radius:var(--radius); padding:1.15rem 1.35rem; color:var(--muted); font-size:.9rem;
+}
+.note strong{color:var(--fg); font-weight:600}
+footer{
+  margin-top:4rem; border-top:1px solid var(--line-soft); padding:1.75rem 0 2.5rem;
+  color:var(--dim); font-size:.82rem;
+  display:flex; flex-wrap:wrap; gap:.75rem 1.5rem; align-items:center; justify-content:space-between;
+}
+footer a{color:var(--muted); text-decoration:none; border-bottom:1px solid var(--line)}
+footer a:hover{color:var(--accent)}
+@media (max-width:34rem){header{padding-top:3.5rem} main{padding-top:2.5rem} .grid{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <span class="badge"><span class="dot"></span>Self-hosted at home</span>
+    <h1>Perspective&#8209;V<br><span class="thin">home services</span></h1>
+    <p class="lede">
+      Files, media and photos, running on a single machine in the house — not in
+      anybody else's cloud.
+    </p>
+  </header>
+
+  <main>
+    <h2>Available services</h2>
+    <div class="grid">
+
+      <a class="card" href="https://next.home.example.com" rel="noopener">
+        <div class="top">
+          <span class="icon">🗂️</span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </div>
+        <span class="name">Nextcloud</span>
+        <span class="desc">Files, sharing, calendar and contacts. Syncs to phone and laptop.</span>
+        <span class="host">next.home.example.com</span>
+      </a>
+
+      <a class="card" href="https://media.home.example.com" rel="noopener">
+        <div class="top">
+          <span class="icon">🎬</span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </div>
+        <span class="name">Jellyfin</span>
+        <span class="desc">Films, series and music. Plays on TV, phone and browser.</span>
+        <span class="host">media.home.example.com</span>
+      </a>
+
+      <a class="card" href="https://images.home.example.com" rel="noopener">
+        <div class="top">
+          <span class="icon">🖼️</span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </div>
+        <span class="name">Immich</span>
+        <span class="desc">Photo library, albums and search by what's actually in the picture.</span>
+        <span class="host">images.home.example.com</span>
+      </a>
+
+      <a class="card" href="https://assistant.home.example.com" rel="noopener">
+        <div class="top">
+          <span class="icon">🏠</span>
+          <span class="tag">LAN + NetBird</span>
+        </div>
+        <span class="name">Home Assistant</span>
+        <span class="desc">Home control and Yui Assist. Available on the home LAN or with NetBird connected.</span>
+        <span class="host">assistant.home.example.com</span>
+      </a>
+
+      <a class="card" href="https://kener.example.com/homelab" rel="noopener">
+        <div class="top">
+          <span class="icon">📈</span>
+          <span class="arrow" aria-hidden="true">→</span>
+        </div>
+        <span class="name">Status</span>
+        <span class="desc">Live uptime for the services on this page. Check here first if something looks broken.</span>
+        <span class="host">kener.example.com/homelab</span>
+      </a>
+
+    </div>
+
+    <section class="routes" aria-labelledby="routes-title">
+      <h2 id="routes-title">One address, two paths</h2>
+      <div class="route-grid">
+
+        <div class="route-card">
+          <div class="route-label"><span class="dot"></span>At home · LAN</div>
+          <h3>Stay inside the house</h3>
+          <p>Pi-hole answers the service names with the homelab address, so local
+             photos, files and media never make the Germany round trip.</p>
+          <div class="route-path" aria-label="Router DHCP to Pi-hole to local Traefik">
+            <span>Router DHCP</span><span class="arrow">→</span><span>Pi-hole</span><span class="arrow">→</span><span>Local Traefik</span>
+          </div>
+          <span class="route-host">192.0.2.10 · local HTTPS edge</span>
+        </div>
+
+        <div class="route-card">
+          <div class="route-label"><span class="dot remote"></span>Away · remote</div>
+          <h3>Keep the same bookmark</h3>
+          <p>Public DNS sends remote visitors to the edge VPS, which carries
+             the request to the homelab through the encrypted NetBird tunnel.</p>
+          <div class="route-path" aria-label="Public DNS to edge VPS to NetBird to homelab">
+            <span>Public DNS</span><span class="arrow">→</span><span>edge VPS</span><span class="arrow">→</span><span>NetBird</span><span class="arrow">→</span><span>Homelab</span>
+          </div>
+          <span class="route-host">100.64.0.10 · encrypted remote path</span>
+        </div>
+
+      </div>
+      <p class="route-caption">The hostname and TLS certificate stay the same; only the DNS answer changes.</p>
+    </section>
+
+    <div class="note">
+      <strong>Home Assistant is available only on the home LAN or through NetBird.</strong>
+      Other administration tools remain private and are not listed here.
+    </div>
+  </main>
+
+  <footer>
+    <span>No open ports at home. LAN traffic stays local; remote traffic uses an encrypted tunnel.</span>
+    <span><a href="https://kener.example.com/homelab" rel="noopener">Service status</a></span>
+  </footer>
+
+</div>
+</body>
+</html>

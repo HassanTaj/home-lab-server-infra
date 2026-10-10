@@ -1,0 +1,323 @@
+---
+title: "Running without a desktop"
+description: "Boot a server to a text console to reduce desktop overhead and switch the desktop back on when needed."
+---
+
+If the server has a desktop environment installed, booting to a text console can
+reduce memory use when the desktop is not needed.
+
+You can turn it off, get that memory back, and turn it on again whenever you
+actually want a desktop. Nothing is uninstalled.
+
+<Warning>
+**Read the RustDesk section before you do this.** RustDesk needs a graphical
+session to share a screen. With the desktop off, your only remote access is SSH.
+Make sure you can SSH in *first*.
+</Warning>
+
+---
+
+## What you get back
+
+Measure memory use on your own host before changing its boot mode. The amount
+recovered depends on the desktop, services, and workloads running there.
+
+---
+
+## How Linux decides whether to show a desktop
+
+One setting, called the **default target**. Think of it as "what mode should this
+machine boot into".
+
+| Target | What it means |
+|---|---|
+| `graphical.target` | Boot into the desktop (what you have now) |
+| `multi-user.target` | Boot into a text console — everything else still runs |
+
+<Info>
+**"Multi-user" is a confusing name.** It doesn't mean multiple people. It means
+"fully working machine, networking and all services up, just no desktop". Every
+container, Nextcloud, Jellyfin, backups — all completely unaffected.
+</Info>
+
+---
+
+## Turning the desktop off
+
+<Steps>
+<Step title="Make sure SSH works first">
+From another machine, with NetBird connected:
+
+```sh
+ssh admin@100.64.0.10
+```
+
+<Warning>
+Do not continue until this works. It becomes your only way in.
+</Warning>
+</Step>
+
+<Step title="Set console mode as the default">
+```sh
+sudo systemctl set-default multi-user.target
+```
+
+Confirm it took:
+
+```sh
+systemctl get-default
+```
+
+Want: `multi-user.target`.
+</Step>
+
+<Step title="Reboot">
+```sh
+sudo systemctl reboot
+```
+
+It comes back to a plain text login prompt. That's success, not a failure.
+</Step>
+
+<Step title="Check you got the memory back">
+```sh
+free -h
+```
+
+`used` should be roughly a gigabyte lower than before.
+</Step>
+
+<Step title="Check the homelab is unaffected">
+```sh
+sudo ./operations/tests/run-all.sh --host
+docker ps
+```
+
+Want `SUITE PASSED` and all six containers running. The desktop was never part of
+the homelab.
+</Step>
+</Steps>
+
+---
+
+## Turning the desktop back on
+
+### Right now, without rebooting
+
+```sh
+sudo systemctl isolate graphical.target
+```
+
+The login screen appears within a few seconds. To go back to console:
+
+```sh
+sudo systemctl isolate multi-user.target
+```
+
+<Tip>
+This is better than what you asked for — you don't have to reboot to get a
+desktop. `isolate` switches mode live. Handy when you're already SSHed in and
+realise you want a GUI for one job.
+</Tip>
+
+### Permanently, so it boots to the desktop again
+
+```sh
+sudo systemctl set-default graphical.target
+sudo systemctl reboot
+```
+
+---
+
+## RustDesk: what breaks and how to get back in
+
+RustDesk shares a screen. With no desktop running there is no screen, so **it
+stops working in console mode.** This is the one real trade-off.
+
+<Accordion title="Getting a RustDesk session back when you're locked out of the GUI">
+The recovery path is SSH first, desktop second:
+
+```sh
+ssh admin@100.64.0.10                        # 1. get in over SSH
+sudo systemctl isolate graphical.target        # 2. start the desktop
+```
+
+The login screen appears on the laptop. RustDesk runs a system-level service
+(`rustdesk --service`), which is the mode that can capture the login screen — so
+you should be able to connect and log in from there.
+
+<Warning>
+**Test this once while you still have easy physical access.** Confirm the
+SSH-then-isolate-then-RustDesk chain actually works on your setup before you rely
+on it from somewhere else.
+</Warning>
+</Accordion>
+
+---
+
+## The better answer: Cockpit
+
+<Check>
+**Already installed and running.** Open it from a NetBird-connected device:
+
+```
+http://100.64.0.10:9090
+```
+
+Log in with your normal Linux username and password.
+</Check>
+
+For the edge VPS-to-homelab remote-host setup, see [Cockpit remote management](../integrations/edge-vps/homelab.yml).
+
+Cockpit is a web interface for administering the machine. It runs as a **system
+service, as root, with no desktop involved** — so it works perfectly in console
+mode.
+
+| | Memory | Root actions | Works without a desktop |
+|---|---|---|---|
+| GNOME | ~776 MB | fights you constantly | no |
+| **Cockpit** | **~78 MB** | **yes — it *is* root** | **yes** |
+
+What you get in the browser:
+
+- **Services** — start, stop, enable, view logs for anything, including your
+  `homelab-*` units
+- **Logs** — searchable system journal, no `journalctl` flags to remember
+- **Storage** — disks, partitions, mounts, filesystem usage
+- **Users** — accounts and SSH keys
+- **Terminal** — a full root shell, in the browser
+
+That last one is the answer to your question about a desktop that doesn't block
+root actions. Cockpit doesn't block anything, because it isn't pretending to be a
+normal user.
+
+<Accordion title="How it's locked down">
+```
+listening on:  100.64.0.10:9090      NetBird address only
+from the LAN:  refused
+memory cap:    256 MB, CPU 30%
+```
+
+Reachable only from devices on your NetBird tunnel, and only by peers in
+`homelab-admins` — the policy for ordinary users permits port 443 only, so they
+cannot reach it at all.
+
+There is deliberately **no public route** for Cockpit. It gives full root control
+of the machine; it should never be one password away from the open internet.
+
+Plain HTTP here is not a downgrade: the only path to that port is the NetBird
+tunnel, which is WireGuard, so the connection is already encrypted between peers.
+</Accordion>
+
+<Accordion title="Why not just switch to KDE or XFCE instead?">
+Because the thing blocking your root actions isn't the desktop — it's **polkit**,
+the permission system, and it behaves the same under GNOME, KDE and XFCE.
+Switching desktops will not remove those password prompts.
+
+GNOME *is* the worst of them for root GUI work specifically: modern Nautilus
+refuses to run as root at all, and the text editor is sandboxed. So if your
+frustration is really "I can't edit system files in a file manager", then XFCE
+(Thunar) or KDE (Dolphin, which has a proper "open as root") genuinely behave
+better — and XFCE is roughly 400 MB against GNOME's 776 MB.
+
+But Cockpit solves the same problem for 78 MB and works with no desktop at all.
+Try it before installing another desktop.
+</Accordion>
+
+---
+
+## When you'd still want GNOME
+
+Keep it installed. It costs nothing when it isn't running, and it's genuinely
+useful for:
+
+- **RustDesk** remote control of the actual desktop
+- A **browser on the machine itself** — occasionally needed for a setup wizard
+  that will only accept a local connection
+- Plugging in a disk and poking around graphically
+
+`systemctl isolate graphical.target`, do the job, `isolate multi-user.target`
+when you're done.
+
+---
+
+## If something goes wrong
+
+<AccordionGroup>
+<Accordion title="I rebooted and now I only see text — how do I get back?">
+That's console mode working as intended. Log in with your username and password
+at the prompt, then:
+
+```sh
+sudo systemctl isolate graphical.target
+```
+
+To make the desktop permanent again:
+
+```sh
+sudo systemctl set-default graphical.target
+```
+</Accordion>
+
+<Accordion title="I can't SSH in and I have no desktop">
+Use the laptop's own keyboard. Console mode still gives you a full login prompt on
+the screen — you have not lost access to the machine, only remote graphical
+access. Log in there and run `sudo systemctl set-default graphical.target`,
+then reboot.
+</Accordion>
+
+<Accordion title="Did this break Nextcloud or Jellyfin?">
+No. Turning the desktop off cannot affect them — they run as containers under
+systemd, entirely separately from any desktop session. Confirm with:
+
+```sh
+sudo ./operations/tests/run-all.sh --host
+```
+</Accordion>
+
+<Accordion title="Cockpit says the connection was refused">
+Two likely causes:
+
+1. **You're not on NetBird.** It only listens on the tunnel address. Connect the
+   VPN and try again.
+2. **Your device isn't in `homelab-admins`.** Only those peers are permitted to
+   reach ports other than 443.
+
+Check it's listening at all, from the machine itself:
+
+```sh
+ss -tlnp | grep 9090
+```
+</Accordion>
+</AccordionGroup>
+
+---
+
+## The short version
+
+```sh
+# turn the desktop off permanently
+sudo systemctl set-default multi-user.target && sudo systemctl reboot
+
+# start it just for now, no reboot
+sudo systemctl isolate graphical.target
+
+# turn it back on permanently
+sudo systemctl set-default graphical.target && sudo systemctl reboot
+
+# see which mode you're in
+systemctl get-default
+```
+
+Administer from a browser at **http://100.64.0.10:9090** either way.
+
+---
+
+<CardGroup cols={2}>
+<Card title="Shutdown, reboot & hardware" icon="power-off" href="maintenance">
+Powering off safely, post-reboot checks, moving a disk, adding memory.
+</Card>
+<Card title="Something's wrong" icon="triangle-exclamation" href="runbook">
+Unplanned problems: symptom, then fix.
+</Card>
+</CardGroup>

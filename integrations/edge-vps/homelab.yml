@@ -1,0 +1,259 @@
+# Traefik routes to the HOMELAB, reached over NetBird.
+#
+# Install path: swarm/configs/traefik/dynamic/homelab.yml in the edge VPS repo,
+# then `operations/traefik/install-dynamic-config.sh`. The file provider watches
+# the directory, so no Traefik restart or stack redeploy is needed. Deleting this
+# file cleanly removes every route in it.
+#
+# The homelab is a separate physical host (demo host) on a home LAN with no
+# port forwarding and no public listener. It is reachable only across the NetBird
+# overlay at 100.64.0.10. Verified YYYY-MM-DD that the edge-traefik container
+# reaches those ports directly — no docker_gwbridge hop is needed here, unlike
+# host-services.yml which targets services on this host.
+#
+# ACCESS MODEL
+#   next.*   PUBLIC. Nextcloud, for the Android client and external users.
+#   home.*   PUBLIC. The landing page. Apex of the home zone, which previously
+#            resolved via the wildcard but had no router at all, so it failed TLS
+#            with "unrecognized name" -- a dead front door. Static page, no
+#            backend dependencies, so it stays up when other things do not.
+#   media.*  PUBLIC by deployment configuration. Jellyfin. Named `media`, not
+#            `movies`, because Jellyfin also serves the music libraries and can
+#            handle photos -- the name should not outgrow the service.
+#   images.* PUBLIC by deployment configuration. Immich. Photos are more
+#            sensitive than course videos and Immich has no per-album access
+#            control comparable to Nextcloud group shares, so this route carries
+#            the same tight login rate limit as media.*
+#   assistant.* netbird-only. Home Assistant is an administration/control surface.
+#   others   netbird-only, exactly like every other administration panel here.
+#
+# NO cockpit.home.* OR beszel.home.* ROUTER, by decisifor this demo:
+#   Beszel  - the homelab runs an AGENT reporting to the existing hub at
+#             beszel.example.com. Beszel is hub/agent by design, so one
+#             dashboard covers both hosts and the laptop runs no web listener.
+#   pgAdmin - REMOVED YYYY-MM-DD. It was the largest consumer on the low-memory host
+#             (251 MB) for a tool opened perhaps monthly, and edge VPS already
+#             runs one. PostgreSQL is now published on the homelab's loopback
+#             only and reached through an SSH tunnel, so no database port is
+#             exposed on any network.
+#   Cockpit - NOT centralised. Cockpit is not a hub/agent system; sharing one UI
+#             across hosts needs AllowMultiHost, which upstream disables by
+#             default because every host in a browser session shares one origin.
+#             Enabling it on the public edge VPS Cockpit would put a homelab root
+#             shell behind that same session. Homelab Cockpit is dropped instead:
+#             Portainer covers Docker, Beszel covers metrics, SSH covers the rest.
+#
+# IMPORTANT: the public wildcard *.example.com already resolves EVERY
+# *.home.example.com name to this server, at any depth. DNS therefore gives
+# no access control whatsoever, and `netbird-only` is the only thing keeping the
+# admin routers private. It is load-bearing, not defence in depth.
+#
+# Middlewares reused from security.yml rather than redefined: `netbird-only`
+# (100.64.0.0/10) and the two security-headers sets. Defining them again here
+# would collide with the existing definitions.
+#
+# Nextcloud gets security-headers-allow-sameorigin, not security-headers:
+# frameDeny breaks Nextcloud's own iframe use (Collabora, app frames).
+
+http:
+  routers:
+    homelab-nextcloud:
+      rule: Host(`next.home.example.com`)
+      entryPoints:
+      - websecure
+      service: homelab-nextcloud
+      middlewares:
+      - homelab-nextcloud-wellknown
+      - homelab-public-ratelimit
+      - security-headers-allow-sameorigin
+      tls:
+        certResolver: letsencrypt
+
+    # LANDING PAGE, PUBLIC. Deliberately the plainest router here: no rate limit
+    # beyond the shared public one, no special middleware. It serves one static
+    # 7 KB file and lists only services that are already public, so there is
+    # nothing to protect and nothing to leak.
+    homelab-landing:
+      rule: Host(`home.example.com`)
+      entryPoints:
+      - websecure
+      service: homelab-landing
+      middlewares:
+      - homelab-public-ratelimit
+      - security-headers
+      tls:
+        certResolver: letsencrypt
+
+    # IMMICH, PUBLIC. Same shape as Jellyfin: streamed responses (photo and video
+    # originals) must not be buffered, and the login endpoint gets a hard rate
+    # limit of its own because it is publicly reachable.
+    homelab-images:
+      rule: Host(`images.home.example.com`)
+      entryPoints:
+      - websecure
+      service: homelab-images
+      middlewares:
+      - homelab-public-ratelimit
+      - security-headers-allow-sameorigin
+      tls:
+        certResolver: letsencrypt
+
+    # Higher-priority router for the login endpoint only, so credential attempts
+    # are throttled without throttling photo loading.
+    homelab-images-login:
+      rule: Host(`images.home.example.com`) && PathPrefix(`/api/auth/login`)
+      priority: 100
+      entryPoints:
+      - websecure
+      service: homelab-images
+      middlewares:
+      - homelab-images-login-ratelimit
+      - security-headers-allow-sameorigin
+      tls:
+        certResolver: letsencrypt
+
+    # JELLYFIN, PUBLIC. Three things differ from a normal router:
+    #
+    # 1. flushInterval on the service. Video is a long streamed response; without
+    #    it Traefik buffers and playback stalls or fails to seek.
+    # 2. A LOGIN rate limit, not just a general one. Jellyfin's sign-in page is
+    #    publicly reachable and it has no lockout worth relying on, so the
+    #    /Users/AuthenticateByName path is limited far harder than streaming.
+    # 3. security-headers-allow-sameorigin, not security-headers: the Jellyfin
+    #    dashboard uses same-origin iframes for plugin configuration pages and
+    #    frameDeny breaks them.
+    #
+    # Bandwidth reality check before relying on this: the stream path is
+    # homelab -> NetBird -> edge VPS -> viewer, so the ceiling is this house's
+    # UPLOAD speed, not the VPS. One 1080p direct-play stream is roughly
+    # 5-15 Mbps. Transcoding to 720p cuts that to ~3 Mbps at the cost of
+    # QuickSync time. If NetBird cannot hold a direct peer connection it relays,
+    # which lowers the ceiling further.
+    homelab-media:
+      rule: Host(`media.home.example.com`)
+      entryPoints:
+      - websecure
+      service: homelab-media
+      middlewares:
+      - homelab-public-ratelimit
+      - security-headers-allow-sameorigin
+      tls:
+        certResolver: letsencrypt
+
+    # Higher-priority router covering only the login endpoint, so the strict
+    # limit applies to credential attempts without throttling playback.
+    homelab-media-login:
+      rule: Host(`media.home.example.com`) && PathPrefix(`/Users/AuthenticateByName`)
+      priority: 100
+      entryPoints:
+      - websecure
+      service: homelab-media
+      middlewares:
+      - homelab-media-login-ratelimit
+      - security-headers-allow-sameorigin
+      tls:
+        certResolver: letsencrypt
+
+    homelab-yui:
+      rule: Host(`assistant.home.example.com`)
+      priority: 1000
+      entryPoints:
+      - websecure
+      service: homelab-yui
+      middlewares:
+      - netbird-only
+      - security-headers-allow-sameorigin
+      tls:
+        certResolver: letsencrypt
+
+    homelab-portainer:
+      rule: Host(`portainer.home.example.com`)
+      entryPoints:
+      - websecure
+      service: homelab-portainer
+      middlewares:
+      - netbird-only
+      - security-headers
+      tls:
+        certResolver: letsencrypt
+
+
+  services:
+    homelab-nextcloud:
+      loadBalancer:
+        servers:
+        - url: http://100.64.0.10:8080
+        passHostHeader: true
+        responseForwarding:
+          # Nextcloud streams large downloads; do not buffer them.
+          flushInterval: 100ms
+
+    homelab-landing:
+      loadBalancer:
+        servers:
+        - url: http://100.64.0.10:8081
+        passHostHeader: true
+
+    homelab-images:
+      loadBalancer:
+        servers:
+        - url: http://100.64.0.10:2283
+        passHostHeader: true
+        responseForwarding:
+          # Immich streams photo and video originals; do not buffer them.
+          flushInterval: 100ms
+
+    homelab-media:
+      loadBalancer:
+        servers:
+        - url: http://100.64.0.10:8096
+        passHostHeader: true
+        responseForwarding:
+          # Jellyfin streams video and uses WebSockets for session state.
+          # Buffering either breaks playback.
+          flushInterval: 100ms
+
+    homelab-yui:
+      loadBalancer:
+        servers:
+        - url: http://100.64.0.10:8123
+        passHostHeader: true
+
+    homelab-portainer:
+      loadBalancer:
+        servers:
+        - url: http://100.64.0.10:9000
+        passHostHeader: true
+
+
+  middlewares:
+    # Nextcloud service discovery. Required for the Android client, WebDAV,
+    # CalDAV and CardDAV to work behind a reverse proxy.
+    homelab-nextcloud-wellknown:
+      redirectRegex:
+        regex: ^https://([^/]+)/\.well-known/(card|cal)dav
+        replacement: https://${1}/remote.php/dav/
+        permanent: true
+
+    # The only publicly reachable homelab route, so it is the only one that needs
+    # a rate limit. Generous enough for sync clients, which are bursty.
+    homelab-public-ratelimit:
+      rateLimit:
+        average: 100
+        burst: 200
+        period: 1s
+
+    # Credential-stuffing brake for the public Jellyfin login. Deliberately tight:
+    # a human logs in seconds apart, a bot does not.
+    homelab-media-login-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 10
+        period: 1m
+
+    # Credential-stuffing brake for the public Immich login.
+    homelab-images-login-ratelimit:
+      rateLimit:
+        average: 5
+        burst: 10
+        period: 1m

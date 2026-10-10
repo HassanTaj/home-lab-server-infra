@@ -1,0 +1,35 @@
+name: homelab-local-edge
+
+services:
+  traefik:
+    image: traefik:v3.7@sha256:9c3b91d5fb7770853ca5c1124a23c34bf2d9b47ffaebeab2614cbaf410dcb2ac
+    container_name: homelab-local-edge
+    restart: unless-stopped
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports:
+      - target: 443
+        published: "443"
+        host_ip: 192.0.2.10
+        protocol: tcp
+    networks:
+      default:
+        ipv4_address: 10.242.0.2
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic:/etc/traefik/dynamic:ro
+      - /srv/homelab/appdata/local-edge/certs:/certs:ro
+      - /srv/homelab/appdata/local-edge/logs:/var/log/traefik
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 256m
+    memswap_limit: 256m
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.242.0.0/16

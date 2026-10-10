@@ -1,0 +1,17 @@
+[Unit]
+Description=Home Assistant (Yui)
+Requires=docker.service
+Wants=network-online.target netbird.service
+After=docker.service network-online.target netbird.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=600
+WorkingDirectory=@REPO_ROOT@/runtime/compose/yui
+ExecStartPre=/usr/sbin/ufw allow from 10.242.0.2 to 100.64.0.10 port 8123 proto tcp comment yui-local-traefik
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/yui/docker-compose.yml up -d --wait
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/yui/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

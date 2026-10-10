@@ -1,0 +1,34 @@
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+
+accessLog:
+  filePath: /var/log/traefik/access.log
+  bufferingSize: 100
+  fields:
+    headers:
+      defaultMode: drop
+
+api:
+  dashboard: false
+
+ping: {}
+
+entryPoints:
+  traefik:
+    address: ":8080"
+  websecure:
+    address: ":443"
+    # LAN Nextcloud uploads can exceed Traefik's 60s default request-body deadline.
+    # Keep Apache's minimum body rate protection; remove only the total duration cap.
+    transport:
+      respondingTimeouts:
+        readTimeout: 0s
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true

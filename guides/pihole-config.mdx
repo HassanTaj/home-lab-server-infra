@@ -1,0 +1,41 @@
+---
+title: "Pi-hole split DNS"
+description: "Run local DNS for the demo service names without exposing the administration dashboard."
+---
+
+Pi-hole answers internal service names with the homelab's LAN address. Remote
+clients can continue to use the separate edge VPS and NetBird path.
+
+## Example records
+
+The Compose example uses `192.0.2.10`, a documentation-only address. Replace it
+with the server's reserved LAN address before deploying. Add only the service
+names you intend to serve locally:
+
+```text
+192.0.2.10 home.example.com
+192.0.2.10 next.home.example.com
+192.0.2.10 images.home.example.com
+192.0.2.10 media.home.example.com
+```
+
+Keep administration names such as Portainer off the ordinary LAN DNS path.
+Restrict their listeners and proxy routes to the private overlay network.
+
+## Safe rollout
+
+1. Confirm Pi-hole binds only to the intended LAN and overlay interfaces.
+2. Query it directly from one client and verify the returned address.
+3. Check local HTTPS routes and certificates.
+4. Test the service from a second client.
+5. Only then consider changing DHCP DNS. Keep the router's previous settings so
+   you can roll back quickly.
+
+```sh
+dig @192.0.2.10 next.home.example.com A
+curl --resolve next.home.example.com:443:192.0.2.10 \
+  https://next.home.example.com/status.php
+```
+
+Both commands use documentation placeholders and will fail until edited for a
+real network.

@@ -1,0 +1,53 @@
+name: homelab-landing
+
+# The public landing page at https://home.example.com
+#
+# Until now that hostname resolved to edge VPS via the wildcard but had no router,
+# so it failed TLS with "unrecognized name" — a dead front door for the whole
+# setup. This serves one static page listing the services people can actually
+# use.
+#
+# WHY STATIC HTML AND NOT TAILWIND OR SHADCN PROPER
+# Both need a Node build step, and Node is deliberately not installed on this
+# low-memory host. A build toolchain on a server is a liability, not a feature. The page
+# is therefore a single self-contained file using the same design language —
+# neutral dark palette, hairline borders, rounded cards — with no CDN request, no
+# JavaScript and nothing to build. It renders instantly and works offline.
+#
+# If real Tailwind/shadcn is ever wanted: build it on a laptop and commit the
+# generated static output into site/. Nothing here needs to change.
+
+services:
+  landing:
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    container_name: homelab-landing
+    restart: unless-stopped
+
+    ports:
+      # NetBird address only, like every other service. edge VPS Traefik is the
+      # only thing that reaches it, and it is the only public edge.
+      - "100.64.0.10:8081:80"
+
+    volumes:
+      # Read-only: the page is version-controlled in this repo, and a public web
+      # server has no business being able to rewrite what it serves.
+      - ./site:/usr/share/nginx/html:ro
+
+    deploy:
+      resources:
+        limits:
+          # It serves one 7 KB file. This is generous.
+          memory: 64m
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

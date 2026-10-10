@@ -1,0 +1,178 @@
+http:
+  routers:
+    homelab-local-nextcloud:
+      rule: Host(`next.home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-nextcloud
+      middlewares: [homelab-lan-only, homelab-nextcloud-wellknown, homelab-public-ratelimit, security-headers-allow-sameorigin]
+      tls: {options: default}
+
+    homelab-local-landing:
+      rule: Host(`home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-landing
+      middlewares: [homelab-lan-only, homelab-public-ratelimit, security-headers]
+      tls: {options: default}
+
+    homelab-local-images:
+      rule: Host(`images.home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-images
+      middlewares: [homelab-lan-only, homelab-public-ratelimit, security-headers-allow-sameorigin]
+      tls: {options: default}
+
+    homelab-local-images-login:
+      rule: Host(`images.home.example.com`) && PathPrefix(`/api/auth/login`)
+      priority: 100
+      entryPoints: [websecure]
+      service: homelab-local-images
+      middlewares: [homelab-lan-only, homelab-images-login-ratelimit, security-headers-allow-sameorigin]
+      tls: {options: default}
+
+    homelab-local-media:
+      rule: Host(`media.home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-media
+      middlewares: [homelab-lan-only, homelab-public-ratelimit, security-headers-allow-sameorigin]
+      tls: {options: default}
+
+    homelab-local-media-login:
+      rule: Host(`media.home.example.com`) && PathPrefix(`/Users/AuthenticateByName`)
+      priority: 100
+      entryPoints: [websecure]
+      service: homelab-local-media
+      middlewares: [homelab-lan-only, homelab-media-login-ratelimit, security-headers-allow-sameorigin]
+      tls: {options: default}
+
+    homelab-local-yui:
+      rule: Host(`assistant.home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-yui
+      middlewares: [homelab-lan-only, homelab-public-ratelimit, security-headers-allow-sameorigin]
+      tls: {options: default}
+
+    homelab-local-portainer:
+      rule: Host(`portainer.home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-portainer
+      middlewares: [netbird-only, security-headers]
+      tls: {options: default}
+
+    homelab-local-pihole:
+      rule: Host(`pihole.home.example.com`)
+      entryPoints: [websecure]
+      service: homelab-local-pihole
+      middlewares: [netbird-only, homelab-pihole-backend-host, security-headers]
+      tls: {options: default}
+
+  services:
+    homelab-local-nextcloud:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:8080}]
+        passHostHeader: true
+        responseForwarding: {flushInterval: 100ms}
+
+    homelab-local-landing:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:8081}]
+        passHostHeader: true
+
+    homelab-local-images:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:2283}]
+        passHostHeader: true
+        responseForwarding: {flushInterval: 100ms}
+
+    homelab-local-media:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:8096}]
+        passHostHeader: true
+        responseForwarding: {flushInterval: 100ms}
+
+    homelab-local-yui:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:8123}]
+        passHostHeader: true
+
+    homelab-local-portainer:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:9000}]
+        passHostHeader: true
+
+    homelab-local-pihole:
+      loadBalancer:
+        servers: [{url: http://100.64.0.10:8053}]
+        passHostHeader: true
+
+  middlewares:
+    homelab-lan-only:
+      ipAllowList:
+        sourceRange: [192.0.2.0/24]
+
+    homelab-nextcloud-wellknown:
+      redirectRegex:
+        regex: ^https://([^/]+)/\.well-known/(card|cal)dav
+        replacement: https://${1}/remote.php/dav/
+        permanent: true
+
+    homelab-public-ratelimit:
+      rateLimit: {average: 100, burst: 200, period: 1s}
+
+    homelab-media-login-ratelimit:
+      rateLimit: {average: 5, burst: 10, period: 1m}
+
+    homelab-images-login-ratelimit:
+      rateLimit: {average: 5, burst: 10, period: 1m}
+
+    homelab-pihole-backend-host:
+      headers:
+        customRequestHeaders: {Host: pi.hole}
+
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: true
+        customFrameOptionsValue: DENY
+        referrerPolicy: strict-origin-when-cross-origin
+
+    security-headers-allow-sameorigin:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        browserXssFilter: true
+        contentTypeNosniff: true
+        frameDeny: false
+        customFrameOptionsValue: SAMEORIGIN
+        referrerPolicy: strict-origin-when-cross-origin
+
+    netbird-only:
+      ipAllowList:
+        sourceRange: [100.64.0.0/10]
+
+tls:
+  certificates:
+    - certFile: /certs/home.example.com/fullchain.pem
+      keyFile: /certs/home.example.com/privkey.pem
+    - certFile: /certs/next.home.example.com/fullchain.pem
+      keyFile: /certs/next.home.example.com/privkey.pem
+    - certFile: /certs/images.home.example.com/fullchain.pem
+      keyFile: /certs/images.home.example.com/privkey.pem
+    - certFile: /certs/media.home.example.com/fullchain.pem
+      keyFile: /certs/media.home.example.com/privkey.pem
+    - certFile: /certs/assistant.home.example.com/fullchain.pem
+      keyFile: /certs/assistant.home.example.com/privkey.pem
+    - certFile: /certs/pihole.home.example.com/fullchain.pem
+      keyFile: /certs/pihole.home.example.com/privkey.pem
+    - certFile: /certs/portainer.home.example.com/fullchain.pem
+      keyFile: /certs/portainer.home.example.com/privkey.pem
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true

@@ -1,0 +1,10 @@
+[Unit]
+Description=Automount for the homelab data disk
+Documentation=file://@REPO_ROOT@/guides/runbook.md
+
+[Automount]
+Where=/mnt/data
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=multi-user.target

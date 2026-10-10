@@ -1,0 +1,43 @@
+_config_version: 44
+
+providers:
+  ollama-local:
+    api: http://ollama:11434/v1
+    extra_body:
+      think: false
+
+model:
+  default: qwen3.5:4b
+  provider: custom:ollama-local
+
+# Blank platform lists disable tools for CLI and API-server sessions.
+platform_toolsets:
+  cli: []
+  api_server: []
+
+# Defense in depth if a later config change adds a CLI toolset.
+agent:
+  reasoning_effort: none
+  disabled_toolsets:
+    - browser
+    - code_execution
+    - computer_use
+    - connections
+    - cronjob
+    - delegation
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - memory
+    - search
+    - session_search
+    - skills
+    - spotify
+    - terminal
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - x_search

@@ -1,0 +1,504 @@
+---
+title: "How it works"
+description: "The design of the homelab and the reasoning behind the parts that look strange, starting from plain language and going as deep as you want."
+---
+
+This explains *why* things are built the way they are. If you just need to fix
+something, use [Something's wrong](runbook) instead.
+
+## The whole thing in one picture
+
+<Steps>
+<Step title="A host runs the services">
+A Linux host runs the Compose stacks for files, media, photos, databases,
+networking, and backups.
+</Step>
+<Step title="Your home router has no holes in it">
+This is the unusual part. Normally you'd tell your router to let outside traffic
+in. **This setup never does that.** There is no way in from the internet.
+</Step>
+<Step title="A private tunnel joins your machines">
+NetBird builds an encrypted tunnel between your laptop, a small rented server
+(edge VPS), and your own devices. Everything travels inside it.
+</Step>
+<Step title="The rented server is the front door">
+When someone visits `next.home.example.com`, they reach **edge VPS**, not
+your house. edge VPS handles the padlock, then passes the request through the
+tunnel to your laptop.
+</Step>
+</Steps>
+
+<Info>
+**Why bother with the rented server?** Two reasons. Your home internet address
+changes and your upload speed is limited, so pointing the world at your house is
+fragile. And more importantly, the rented server means nothing on the public
+internet can ever knock on your laptop's door directly.
+</Info>
+
+## The design in one paragraph, for the technical reader
+
+The homelab can run Pi-hole as a LAN-only DNS server and a small file-provider
+Traefik edge on a reserved LAN address. The edge VPS Traefik is the public/remote
+TLS endpoint and reaches application backends over NetBird. Application services
+bind to a NetBird address; local Traefik forwards to
+those same ports over the host's NetBird interface. Pi-hole binds DNS to
+the LAN interface, and its dashboard remains NetBird-only. The home router
+forwards no ports. Local DNS records are distributed only after the local edge
+has passed its HTTPS checks.
+
+## Four rules everything else follows from
+
+<AccordionGroup>
+<Accordion title="1. Nothing listens where the public can reach it">
+Every service is bound to the private tunnel address, never to `0.0.0.0`. A test
+(`check-listeners.sh`) fails the build if that ever slips, because it's the kind
+of mistake that's invisible until it's exploited.
+</Accordion>
+
+<Accordion title="2. If we can't prove it's safe, we stop">
+Called *failing closed*. Nextcloud and Jellyfin refuse to start unless the data disk
+disk is genuinely mounted — not just "the folder exists", but the right disk with
+the right ID and a marker file inside.
+
+Without that check, an unplugged disk means an empty folder, the services decide
+every file was deleted, and they tell your phone to delete its copies too. A
+service that won't start is annoying. Silently deleting your photos is not
+recoverable.
+</Accordion>
+
+<Accordion title="3. Your files live in ordinary folders">
+No Docker volumes anywhere. Everything is a normal folder under `/srv/homelab/`
+that you can open, copy and back up like any other file. `docker volume ls` being
+empty is correct and always will be.
+</Accordion>
+
+<Accordion title="4. Stopping must never mean deleting">
+Every service is told to *stop* rather than *tear down*. This sounds pedantic
+until you know it caused a real service outage: a two-second data disk glitch made
+systemd shut the stack down, and because the shutdown said "tear down", every
+container was destroyed. It looked exactly like total data loss. Nothing was
+actually lost, but nobody could tell that for hours.
+</Accordion>
+</AccordionGroup>
+
+## The public front door
+
+`https://home.example.com` is a static landing page listing the services
+people can use — Nextcloud, Jellyfin, Immich, and the status page. It has **no
+dependency on the data disk, the database, or anything else**,
+so it stays up when other things do not. That is deliberate: it is what someone
+loads when they are trying to work out whether anything is working.
+
+The landing page also explains the two network paths behind the same hostnames:
+LAN clients use Pi-hole and the local HTTPS edge, while remote/public clients
+use edge VPS and NetBird. Only the DNS answer changes; host-based routing and
+trusted TLS remain the same.
+
+Configure public DNS records for the application hostnames to point at the edge
+VPS, and configure local DNS to return the homelab LAN address. Keep
+administration hostnames off the public DNS path and behind the private overlay.
+
+~~~text
+                         Same HTTPS hostname
+                                  │
+                 ┌────────────────┴────────────────┐
+                 │                                 │
+            Home LAN                          Remote/public
+                 │                                 │
+        Pi-hole (LAN address)           public DNS
+                 │                                 │
+       Local Traefik 192.0.2.10:443   edge VPS Traefik :443
+                 │                                 │
+                 │                              NetBird
+                 │                                 │
+                 └───────────────┬───────── Homelab (NetBird address)
+                                 │
+                 Immich · Nextcloud · Jellyfin
+~~~
+
+Administration tools are deliberately **not** listed on it. Publishing the
+hostnames of NetBird-only services on a public page would hand out the list of
+things to probe, and `netbird-only` is the only access control those routes have.
+
+It is plain static HTML with no build step and no CDN request, because Node is
+deliberately not installed on this host. If richer tooling is ever wanted, build
+it on a laptop and commit the generated output into
+`runtime/compose/landing/site/`.
+
+## Layout
+
+```text
+runtime/
+  compose/databases/     shared PostgreSQL 18 + NetBird-only pgAdmin
+  compose/nextcloud/     Nextcloud web + cron + private Redis
+  compose/management/    Portainer CE
+  compose/networking/    Pi-hole LAN DNS; dashboard on NetBird only
+  compose/local-edge/    file-provider Traefik on the LAN address only
+  environments/examples/ sanitized env templates; live copies go to /etc/homelab
+operations/
+  lib/                   shared shell helpers (fail-closed checks, locking)
+  bootstrap/             preflight, directories, networks, secrets, DB roles,
+                         systemd units, Nextcloud configuration
+  storage/               data mount units, layout init, mount verification
+  monitoring/            Cockpit and Beszel installation
+  networking/            Pi-hole preflight, secret setup and validation
+  backups/               Restic jobs, retention, checks, diagnostics, timers
+  restore/               file/database restore and the monthly drill
+  teardown/              exact-name legacy removal
+  tests/                 compose, secrets, shell, listener and fail-closed tests
+integrations/edge-vps/    Traefik, NetBird DNS and Kener artifacts (apply on edge VPS)
+```
+
+## Service map
+
+| Service | Bind | Public host | Access |
+|---|---|---|---|
+| Jellyfin | 100.64.0.10:8096 | media.home.example.com | Public, rate-limited |
+| Immich | 100.64.0.10:2283 | images.home.example.com | Public, rate-limited |
+| Landing page | 100.64.0.10:8081 | home.example.com | Public, static |
+| Nextcloud | `100.64.0.10:8080` | `next.home.example.com` | Public, rate-limited |
+| Portainer | `100.64.0.10:9000` | `portainer.home.example.com` | NetBird-only |
+| pgAdmin | `100.64.0.10:5050` | `pgadmin.home.example.com` | NetBird-only |
+| Cockpit | `100.64.0.10:9090` | `cockpit.home.example.com` | NetBird-only |
+| Beszel hub | `100.64.0.10:8090` | `beszel.home.example.com` | NetBird-only |
+| Beszel agent | `127.0.0.1:45876` | — | Loopback only |
+| PostgreSQL | none | — | `homelab-db` network only |
+| Redis | none | — | Nextcloud project network only |
+| Pi-hole DNS | `192.0.2.10:53` TCP/UDP | four application records | Home LAN only |
+| Pi-hole dashboard | `100.64.0.10:8053` | — | NetBird-only |
+| Local HTTPS edge | `192.0.2.10:443` | existing `*.home` names | LAN-only application routes; NetBird-only administration |
+
+## Pinned images
+
+Every image is pinned to an explicit version **and** an immutable amd64 digest.
+No `latest`, no Watchtower, no unattended upgrades. Digests are resolved for
+linux/amd64 and recorded when each service is added.
+
+| Image | Version |
+|---|---|
+| `nextcloud` | `34.0.2-apache` |
+| `postgres` | `18.4-bookworm` |
+| `redis` | `8.10.0-alpine` |
+| `dpage/pgadmin4` | `9.17` |
+| `portainer/portainer-ce` | `2.44.0-alpine` |
+| `pihole/pihole` | `2026.07.2` |
+| `jellyfin/jellyfin` | `10.11.9` |
+| `ghcr.io/immich-app/immich-server` | `v3.1.0` |
+| `ghcr.io/immich-app/immich-machine-learning` | `v3.1.0` |
+| `valkey/valkey` | `9` |
+
+The Nextcloud web and cron containers share a single YAML anchor, so they cannot
+drift onto different digests.
+
+## Storage
+
+```text
+/srv/homelab/appdata/{nextcloud,postgres,portainer,jellyfin,immich,pihole}  application state
+/srv/homelab/nextcloud-data                                  primary user data (internal SSD)
+/srv/homelab/shared-internal                                 group share on the SSD -> /mnt/internal-shared
+/srv/homelab/backup-staging                                  database dumps, restore scratch
+/mnt/data                                                     the data disk, NTFS data disk, whole-disk share
+/mnt/data/.homelab/backups/internal                           Restic repo: copy of internal data
+```
+
+Decide which datasets are included in each backup job. A separately mounted disk
+is not automatically protected just because the service data is. Document any
+excluded datasets and choose an offsite copy if the recovery goal requires one.
+
+### Naming rule for mountpoints
+
+Mountpoints are named for **purpose**, never for the bus or the brand.
+
+Name mountpoints for their purpose rather than the current device, bus, or brand.
+That keeps service configuration readable when storage hardware changes.
+
+Renaming a mountpoint is not a one-line change. It touches the `.mount` and
+`.automount` unit **filenames** (systemd derives them from the path), every
+`RequiresMountsFor=`, both container binds, `RESTIC_REPO_INTERNAL`, and
+`oc_storages.id` in the Nextcloud database — see `guides/maintenance.mdx`.
+
+**Fail-closed.** If the data disk is absent, `verify-disk.sh` fails, the Compose
+launcher refuses to start, and every backup job aborts. Nothing ever writes into
+an unmounted mountpoint.
+
+## Deployment sequence
+
+The complete reproducible procedure is [Build it from scratch](setup).
+The compact sequence below is a reference for an already-prepared host:
+
+```sh
+sudo operations/tests/run-all.sh              # repo checks, no host changes
+sudo operations/bootstrap/30-secrets.sh       # templates into /etc/homelab
+#   ... fill in the CHANGE_ME values ...
+sudo operations/bootstrap/00-preflight.sh     # read-only, must pass
+sudo operations/bootstrap/10-directories.sh
+sudo operations/bootstrap/20-networks.sh
+sudo operations/bootstrap/50-systemd.sh
+sudo systemctl start 'mnt-data.mount'
+sudo operations/storage/init-disk-layout.sh    # preserves all existing data disk content
+sudo operations/monitoring/install-cockpit.sh
+sudo BESZEL_VERSION=<pinned> operations/monitoring/install-beszel.sh
+# --- NetBird DNS + policies, then edge VPS Traefik: production approval required
+sudo operations/teardown/10-stop-legacy.sh    # reversible
+sudo systemctl start homelab-databases.service \
+                    homelab-networking.service \
+                    homelab-landing.service \
+                    homelab-immich.service \
+                    homelab-management.service \
+                    homelab-media.service \
+                    homelab-nextcloud.service
+sudo systemctl start homelab-stack-watchdog.timer
+sudo operations/bootstrap/60-configure-nextcloud.sh
+sudo operations/tests/run-all.sh --host
+sudo operations/tests/test-mail.sh you@example.com
+# --- only after acceptance AND a passing restore drill:
+sudo operations/teardown/20-remove-legacy-objects.sh --confirm REMOVE-LEGACY
+sudo operations/teardown/30-delete-old-nextcloud-data.sh --confirm DELETE-OLD-NEXTCLOUD-DATA
+```
+
+Every teardown script defaults to a dry run and requires an explicit
+confirmation phrase. No script ever uses `docker system prune`.
+
+## Why the stack is split into three units
+
+`homelab-databases`, `homelab-nextcloud` and `homelab-management` are separate
+systemd units, and only Nextcloud is tied to the data disk. That split is the
+direct result of an outage on **an earlier deployment 05:34**, and reverting it would
+reintroduce the fault.
+
+There used to be one unit, `homelab-compose.service`, driving all three Compose
+projects. It carried `RequiresMountsFor=/mnt/data`, which systemd expands
+into a hard `Requires=` on the mount unit — meaning *if the mount stops, stop me
+too*. Then the USB disk re-enumerated for two seconds:
+
+```
+05:34:42  kernel: usb 1-2: USB disconnect, device number 7
+          kernel: ntfs3(sdb1): Mark volume as dirty due to NTFS errors
+05:34:43  systemd[1]: Stopping homelab-compose.service...      <- cascade
+05:34:44  kernel: usb 1-2: new high-speed USB device number 8  <- disk is back
+05:34:44..56  docker compose down x3 -> every container and network REMOVED
+```
+
+Three things compounded into a service outage:
+
+1. **One unit, one blast radius.** PostgreSQL, Redis and Portainer bind nothing
+   inside `/mnt/data`, yet all three died with the mount.
+2. **`ExecStop` used `docker compose down`.** A cascade stop therefore *destroyed*
+   the containers and networks instead of stopping them. `docker ps -a` came back
+   empty, which reads exactly like data loss even though nothing was lost.
+3. **Nothing restarted it.** The units are `Type=oneshot` with no `Restart=`, and
+   the automount only mounts on access. The disk returned one second later and
+   the stack stayed down.
+
+The current design fixes each one:
+
+| Fix | Where |
+|---|---|
+| Only Nextcloud depends on the data disk | `homelab-nextcloud.service` keeps `RequiresMountsFor` + `verify-disk.sh`; the other two units have neither |
+| A cascade stops but never destroys | every `ExecStop` uses `compose stop`, never `down` |
+| A transient blip self-heals | `homelab-stack-watchdog.timer` runs every 2 min and starts any enabled unit found down |
+
+`verify-disk.sh` is deliberately still an `ExecStartPre` on Nextcloud. Fail-closed
+is the point: without it the `/mnt/data` bind mount would silently resolve
+to an empty directory on the SSD and users would write "to the data disk" onto the
+root filesystem. The watchdog does not weaken this — it skips Nextcloud entirely
+while `/dev/disk/by-uuid/$DATA_UUID` is absent, so it waits for the disk rather
+than starting a degraded Nextcloud.
+
+`operations/tests/test-fail-closed.sh` §3 asserts all of the above, including
+that `homelab-databases` and `homelab-management` have *not* re-acquired a data disk
+dependency and that no `ExecStop` has drifted back to `down`.
+
+### Degraded mode: running without the data disk
+
+`homelab-nextcloud.service` refuses to start without the disk, on purpose. But
+almost all of Nextcloud's data is on the internal SSD — `nextcloud-data`,
+`appdata/nextcloud/html`, `shared-internal` — and only the two data disk external
+storages need the disk. A dead or lost disk should not mean a total outage with
+no way back except hand-editing Compose.
+
+```sh
+sudo operations/storage/nextcloud-degraded.sh --status
+sudo operations/storage/nextcloud-degraded.sh --on     # serve the SSD data now
+sudo operations/storage/nextcloud-degraded.sh --off     # requires the real disk back
+```
+
+`--off` runs `verify_data_mounted` first and refuses to leave degraded mode unless
+the genuine disk (matching UUID plus marker file) is mounted.
+
+#### The trap this avoids
+
+It is not enough to stop binding the disk. If Nextcloud can still see
+`/mnt/data` as an **empty directory**, its scanner treats every file under
+the data-disk external storages as deleted, purges them from `oc_filecache`, and sync
+clients then delete the users' local copies. On this host that is **many rows,
+99.97% of the entire table** — a temporary unplug would become permanent deletion
+on people's laptops. Two independent guards prevent it:
+
+1. `docker-compose.degraded.yml` binds a regular **file** over `/mnt/data`.
+   The Local backend's `is_dir()` check fails, so the storage reports
+   *unavailable* rather than *empty*, and unavailable storages are never scanned.
+   Compose cannot delete a volume entry from the base file, only override its
+   source — and a file is the one source Docker cannot silently turn into an
+   empty directory the way it auto-creates a missing one.
+2. The script repoints both data-disk external storages at `/mnt/data-OFFLINE`, so they
+   report unavailable even if guard 1 were ever removed.
+
+Verified: `occ files_external:verify` returns
+`status: error — Local storage path does not exist` for both mounts, and the
+filecache count is unchanged across a full `--on` → unmount → remount → `--off`
+cycle.
+
+#### Why it is a separate unit and not a drop-in
+
+The obvious implementation is a drop-in on `homelab-nextcloud.service` that
+blanks `RequiresMountsFor=`. **It does not work.** systemd treats
+`RequiresMountsFor=` and the `Requires=` it generates as additive only; an empty
+assignment is ignored. Measured on systemd 257 — with the drop-in installed,
+`systemctl show -p RequiresMountsFor` still reported `/mnt/data`, so a data disk
+removal would have cascade-stopped the very unit meant to survive it.
+
+Hence two units and `Conflicts=` (which is implicitly symmetric, so the two can
+never both hold the same containers). Mode is switched by swapping which unit is
+*enabled*, which also means the choice survives a reboot, and the watchdog needs
+no extra state: it manages whichever unit is enabled and leaves disabled ones
+alone. `test-fail-closed.sh` §3a asserts the degraded unit has not re-acquired a
+data-disk dependency and that exactly one mode is enabled.
+
+### Operating it
+
+```sh
+# what is up
+systemctl is-active homelab-{databases,nextcloud,management,media,immich,networking,landing,local-edge}.service
+
+# suspend the watchdog for maintenance, so it does not fight a deliberate stop
+sudo touch /etc/homelab/stack-hold
+sudo rm    /etc/homelab/stack-hold      # resume
+
+# see what the watchdog has been doing
+journalctl -u homelab-stack-watchdog.service -n 50
+```
+
+## Apache workers, PostgreSQL connections and memory
+
+These three numbers are coupled. Changing one alone is what broke this host on
+an earlier deployment, so treat them as a single setting.
+
+| Knob | Where | Value |
+|---|---|---|
+| `MaxRequestWorkers` | `runtime/compose/nextcloud/apache-mpm.conf` | 48 |
+| `max_connections` | PostgreSQL default | 100 |
+| Nextcloud container memory | `deploy.resources.limits.memory` | 2048m |
+| PostgreSQL container memory | `deploy.resources.limits.memory` | 1536m |
+
+The Nextcloud image ships Debian's prefork default of `MaxRequestWorkers 150`,
+which on this host overran two hard limits at once:
+
+- **Memory.** A burst to ~114 workers drove cgroup `memory.peak` to 2.1G against
+  `memory.max` 2.0G and the container was OOM-killed (`docker inspect` reported
+  `OOMKilled=true`). Measured marginal cost is **~13 MB per worker**
+  (11 workers ≈ 0.8G, 114 workers ≈ 2.1G).
+- **Database.** Apache was permitted 150 concurrent connections against
+  `max_connections=100`, producing `FATAL: sorry, too many clients already` at
+  105 connections. That breaks page loads and, worse, can refuse the nightly
+  `pg_dump`, so a busy evening could silently cost a backup.
+
+Two rules must both hold:
+
+    MaxRequestWorkers  <  max_connections - (cron + backup + admin headroom)
+    baseline + MaxRequestWorkers * 13MB  <  container memory limit
+
+At 48 workers: ~1.2G of 2048m, and ~50 of PostgreSQL's 100 connections left over.
+Verified after the change — 6 workers idle, 9/100 connections, and a full backup
+run completed without a connection error.
+
+### If we need more connections
+
+In order of preference. Note the first two *reduce* connection demand rather than
+raising the ceiling, which is almost always the better trade on a 4-CPU host.
+
+1. **Move to `mpm_event` + php-fpm** (the official `nextcloud:*-fpm` image).
+   prefork + mod_php costs one OS process *and* one database connection per
+   concurrent request. php-fpm decouples idle keep-alive connections from PHP
+   workers and cuts memory sharply. This is the real fix if traffic grows, and it
+   lets a smaller worker pool serve far more clients.
+2. **PgBouncer in transaction mode.** Multiplexes hundreds of client connections
+   onto ~20 server connections. Caveat: transaction pooling is incompatible with
+   server-side prepared statements, so Nextcloud must run with
+   `PDO::ATTR_EMULATE_PREPARES`, or use session pooling and accept less gain.
+   Worth it only at genuine scale.
+3. **Raise all three numbers together.** Each PostgreSQL connection is a forked
+   backend costing a few MB plus `work_mem` per sort, so 100 → 200 needs the
+   PostgreSQL container limit raised and `work_mem` kept small; and raising
+   `MaxRequestWorkers` needs the Nextcloud limit raised by ~13 MB per worker.
+   This is the brute-force option and the one that causes OOM kills when done
+   piecemeal.
+
+For scale: 48 workers is large for a handful of accounts. A browser opens roughly
+6-10 concurrent connections and a sync client a few more, so this host would need
+something like 6-8 simultaneously active users before 48 became the constraint.
+Signals to watch: `too many clients already` in the PostgreSQL log, 500s in
+Nextcloud, and the peak connection count. Beszel already monitors host memory.
+
+## Secrets
+
+Live values live in `/etc/homelab/*.env`, root-owned, mode `0600`. Scripts refuse
+to read a secrets file with looser permissions. Only `*.example.env` templates
+containing `CHANGE_ME` placeholders are tracked in Git;
+`operations/tests/check-secrets.sh` enforces this.
+
+Losing `RESTIC_PASSWORD_INTERNAL` makes the matching
+repository permanently unrecoverable. Store both offline.
+
+## Maintenance
+
+Monthly, controlled, one component at a time — see `guides/setup.mdx` §8. Take a
+backup, update the digest, restart, run the acceptance suite. Never skip a
+Nextcloud major version, and never move PostgreSQL 18 → 19 by changing the tag.
+
+## Two-disk bulk pool and media paths
+
+The storage design deliberately separates irreplaceable or transactional data
+from replaceable bulk files:
+
+```
+SSD (/home)
+  /srv/homelab/immich-data                 managed originals
+  /srv/homelab/shared-internal             protected shared photos/files
+  /srv/homelab/storage-branches/ssd        mergerfs branch
+
+HDD (/mnt/data)
+  /mnt/data/Tutorials                        Jellyfin source (read-only)
+  /mnt/data/.homelab/storage-branches/hdd   dedicated mergerfs branch
+  existing archive content                   remains outside the pool
+
+Pool
+  /mnt/storage/nextcloud                     Nextcloud bulk external storage
+```
+
+The pool is mounted with category.create=pfrd, a 200 GiB SSD reserve, and a
+50 GiB HDD reserve. It is not RAID, backup, or automatic tiering. A branch
+failure affects only files created on that branch; direct branch paths remain
+available for recovery. The pool verifier refuses an absent branch, wrong
+filesystem UUID, missing marker, or a non-mergerfs mount.
+
+### Immich originals and Example Album
+
+Immich's /data is backed by /srv/homelab/immich-data. Generated thumbnails,
+encoded video, profiles, and backups stay under
+/srv/homelab/appdata/immich/generated. The old library tree is kept during
+the rollback window.
+
+The read-only host bind
+/srv/homelab/shared-internal:/mnt/shared-internal:ro lets an admin create an
+Immich external library at
+/mnt/shared-internal/Example Album. Immich indexes those files
+without copying them. Because Immich does not turn external folder names into
+albums, run the manual folder-album helper after each external-library scan.
+
+### Jellyfin tutorial libraries
+
+Jellyfin uses one musicvideos library per immediate child of
+/media/Tutorials. The helper preserves the subject and course-folder names,
+creates no libraries automatically on a timer, and never deletes an existing
+library. Its API key is root-only under /etc/homelab.

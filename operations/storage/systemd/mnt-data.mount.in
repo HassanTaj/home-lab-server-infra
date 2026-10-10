@@ -1,0 +1,33 @@
+[Unit]
+Description=Homelab data disk (example data disk, NTFS, internal drive bay)
+Documentation=file://@REPO_ROOT@/guides/runbook.md
+# Renamed on an earlier deployment from the unit formerly named after the USB path. The
+# disk moved out of an external enclosure into an internal drive bay, so the old
+# name described a bus it no longer sits on. See guides/architecture.mdx for the naming rule:
+# mountpoints are named for PURPOSE, never for the bus or the brand.
+#
+# Still nofail. The disk is internal now and cannot be unplugged, but a SATA
+# link failure or a dead spindle must not block boot.
+
+[Mount]
+What=/dev/disk/by-uuid/DEMO_DATA_DISK_UUID
+Where=/mnt/data
+Type=ntfs3
+# windows_names rejects filenames the NTFS driver cannot represent safely.
+#
+# uid/gid 33 is www-data, the account Nextcloud runs as. NTFS carries no Unix
+# ownership, so the whole filesystem takes these values from the mount options —
+# root-owned (uid=0,umask=0077) meant Nextcloud could not write to its own share
+# and the external storage appeared empty.
+#
+# umask=0007 gives owner and group full access and OTHERS NOTHING, so the disk
+# stays unreadable to ordinary accounts on this host.
+#
+# x-gvfs-show makes the disk appear in the GNOME Files sidebar. Without it a
+# systemd-managed mount is reachable by path but invisible in the desktop, which
+# reads as "the drive isn't mounted".
+Options=rw,noatime,nofail,windows_names,uid=33,gid=33,umask=0007,x-gvfs-show
+TimeoutSec=30
+
+[Install]
+WantedBy=multi-user.target

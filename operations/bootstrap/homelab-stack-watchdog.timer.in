@@ -1,0 +1,16 @@
+[Unit]
+Description=Homelab stack watchdog every 2 minutes
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+
+[Timer]
+# Runs shortly after boot as a second line of defence behind the units' own
+# WantedBy=multi-user.target, then every two minutes. Two minutes is short
+# enough that a disk blip is invisible to users and long enough that a genuinely
+# broken unit is not restarted in a tight loop.
+OnBootSec=2min
+OnUnitInactiveSec=2min
+AccuracySec=15s
+Unit=homelab-stack-watchdog.service
+
+[Install]
+WantedBy=timers.target

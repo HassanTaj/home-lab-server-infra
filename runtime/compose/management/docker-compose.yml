@@ -1,0 +1,43 @@
+name: homelab-management
+
+# Portainer CE, NetBird-only.
+#
+# Portainer is deliberately given the Docker socket and is therefore a
+# privileged administrative surface. It must never be publicly routable.
+#
+# FIRST-RUN TIMEOUT: Portainer disables account creation if no admin exists
+# within a few minutes of first start, and then reports "Your Portainer instance
+# timed out for security purposes". Recovery is to restart the container and
+# create the admin immediately. Since 2.44 that also requires a one-time setup
+# token printed in the container log:
+#
+#   docker restart homelab-portainer
+#   docker logs homelab-portainer 2>&1 | grep -i token
+#   curl -X POST http://100.64.0.10:9000/api/users/admin/init \
+#        -H 'Content-Type: application/json' -H 'X-Setup-Token: <token>' \
+#        -d '{"Username":"admin","Password":"<password>"}'
+#
+# Credentials for this instance live in /etc/homelab/portainer.env (0600).
+
+services:
+  portainer:
+    # Portainer CE 2.44.0-alpine. Digest resolved YYYY-MM-DD for linux/amd64.
+    image: portainer/portainer-ce:2.44.0-alpine@sha256:d3e3c01dd9cfb79640b7f3ca4b6b7c97dc3afaa6d974dd27ff1eaa64c6b6ce85
+    container_name: homelab-portainer
+    restart: unless-stopped
+    command: -H unix:///var/run/docker.sock --http-enabled
+    ports:
+      # NetBird address only. Never 0.0.0.0.
+      - "100.64.0.10:9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /srv/homelab/appdata/portainer:/data
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

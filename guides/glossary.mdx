@@ -1,0 +1,364 @@
+---
+title: "Words you'll see"
+description: "Every technical term used in these guides, explained in plain language with the analogy that makes it stick."
+---
+
+You don't need to memorise this. Skim it once, then come back when a word trips
+you up.
+
+For the system map, start with the [operator index](index). The [runbook](runbook)
+shows recovery steps, and the [script reference](scripts) explains the commands.
+
+## The big picture
+
+<AccordionGroup>
+<Accordion title="Server">
+A computer whose job is to sit there and answer requests from other computers.
+Yours is a Dell laptop with the lid closed. That's all a server is — a normal
+computer doing a boring, useful job instead of showing you YouTube.
+</Accordion>
+
+<Accordion title="Homelab">
+A server you run at home for yourself, to learn on and to own your own data.
+Not a business, not a data centre. Just your computer doing server things.
+</Accordion>
+
+<Accordion title="Self-hosting">
+Running the software yourself instead of paying a company to run it. Google
+Photos is hosted by Google. Immich on your laptop is self-hosted. You get
+control and privacy; you take on the job of keeping it running.
+</Accordion>
+</AccordionGroup>
+
+## Containers
+
+<AccordionGroup>
+<Accordion title="Container">
+A program plus everything it needs to run, sealed in a box.
+
+Think of a **lunchbox**. The sandwich, the fork, the napkin — all in one
+container. You can hand it to anyone and it works, because nothing was left
+behind on your kitchen counter.
+
+Nextcloud in a container brings its own web server, its own PHP, its own
+libraries. Nothing on your laptop has to be set up to match.
+</Accordion>
+
+<Accordion title="Image">
+The recipe a container is made from. Downloaded once, then used to create
+containers.
+
+Lunchbox again: the **image** is the recipe, the **container** is the actual
+packed lunch. You can make many lunches from one recipe.
+</Accordion>
+
+<Accordion title="Docker">
+The program that runs containers. When you type `docker ps`, you're asking
+Docker "what's running right now?"
+</Accordion>
+
+<Accordion title="Docker Compose">
+A file that describes several containers that belong together, so you can start
+them all with one command instead of typing long options by hand.
+
+Your `runtime/compose/` folder holds one of these files per group of services.
+</Accordion>
+
+<Accordion title="Volume vs bind mount">
+Containers forget everything when they stop. Anything you want to keep must live
+*outside* the container.
+
+- A **volume** is storage Docker manages in a hidden place.
+- A **bind mount** is a normal folder on your laptop, handed to the container.
+
+**This homelab uses only bind mounts.** Your files live in ordinary folders under
+`/srv/homelab/` that you can open, copy and back up like anything else. That is
+why `docker volume ls` shows nothing — and why that's correct, not broken.
+</Accordion>
+</AccordionGroup>
+
+## Storage
+
+<AccordionGroup>
+<Accordion title="Mounting">
+Attaching a disk so it appears as a folder you can open.
+
+On Windows a data disk becomes `E:`. On Linux it becomes a folder — here,
+`/mnt/data`. "The disk is mounted" means "the folder works".
+</Accordion>
+
+<Accordion title="Mountpoint">
+The folder where a disk appears. `/mnt/data` is a mountpoint.
+
+**The dangerous part:** if the disk is unplugged, that folder still *exists* —
+it's just empty. Write into it and you're writing to your laptop's internal
+drive while believing you're writing to the data disk. Guarding against exactly
+this is why several scripts refuse to run unless they can *prove* the real disk
+is there.
+</Accordion>
+
+<Accordion title="Filesystem, ext4, NTFS">
+The way a disk organises files internally.
+
+- **ext4** — the normal Linux one. Your internal drive.
+- **NTFS** — the Windows one. Your data disk. It works on Linux but has no real
+  Linux file permissions, which is why the data disk is mounted with everything
+  forced to one owner.
+</Accordion>
+
+<Accordion title="Partition">
+A slice of a physical disk, treated as a separate drive.
+
+Your one internal SSD is sliced into `/` (the system), `/srv` (your data) and
+swap. Confusingly, `/` and `/srv` are the *same physical disk* — so moving files
+between them gains you nothing if the disk dies.
+</Accordion>
+
+<Accordion title="Swap">
+Emergency space on disk that the computer uses when it runs out of memory.
+
+Like putting papers on the floor when your desk is full. It works, but reaching
+them is *much* slower. Heavy swapping is why a computer feels like it's wading
+through mud.
+</Accordion>
+</AccordionGroup>
+
+## Permissions
+
+<AccordionGroup>
+<Accordion title="User, group, owner">
+Every file records who owns it and which group it belongs to. Programs run as a
+user too.
+
+Nextcloud runs as a user called `www-data`, which has the number **33**. If a
+file isn't owned by `www-data` and doesn't let its group in, Nextcloud simply
+cannot read it. This is the single most common reason a folder you copied in
+doesn't show up.
+</Accordion>
+
+<Accordion title="Permissions like 0770 and 2770">
+Three digits, one each for **owner**, **group**, and **everyone else**.
+4 = read, 2 = write, 1 = enter a folder. Add them up: 7 = all three.
+
+- `0770` — owner and group get everything, **everyone else gets nothing**
+- `0644` — owner can write, everyone can read
+
+A leading `2` (as in `2770`) is the **setgid** bit: new files created inside
+automatically join the folder's group. It saves you fixing permissions every
+time — though it can't help with `mv`, which doesn't create new files at all.
+</Accordion>
+
+<Accordion title="root and sudo">
+`root` is the administrator account that can do anything, including destroy the
+system. `sudo` means "do this one command as root".
+
+That's why almost every command in these guides starts with `sudo`.
+</Accordion>
+</AccordionGroup>
+
+## Networking
+
+<AccordionGroup>
+<Accordion title="IP address">
+A computer's phone number on a network. `192.0.2.10` is your laptop's number
+on your home Wi-Fi.
+</Accordion>
+
+<Accordion title="DNS">
+The phone book. It turns a name people can remember
+(`next.home.example.com`) into a number computers can dial.
+
+<Warning>
+DNS is a phone book, **not a lock**. Anyone can look up a name. Knowing the
+name doesn't grant access — that's what the access rules are for. This matters
+here: your domain's wildcard means *every* `*.home.example.com` name
+already resolves, so DNS gives no protection at all.
+</Warning>
+</Accordion>
+
+<Accordion title="Port">
+A numbered door on a computer. One computer, many doors, a different service
+behind each. `8096` is Jellyfin's door; `8080` is Nextcloud's.
+</Accordion>
+
+<Accordion title="Reverse proxy (Traefik)">
+A receptionist. Visitors arrive at one front desk, say who they want, and get
+sent to the right room.
+
+Your edge VPS server runs **Traefik**. Everyone arrives at edge VPS, and Traefik
+looks at the name they asked for and forwards them to the right service on your
+laptop.
+</Accordion>
+
+<Accordion title="TLS, HTTPS, certificate">
+The padlock in your browser. It encrypts the connection so nobody in between can
+read it, and proves the site is really who it claims.
+
+A **certificate** is the proof, issued free by Let's Encrypt. Traefik gets and
+renews yours automatically.
+</Accordion>
+
+<Accordion title="VPN and NetBird">
+A private tunnel between your devices across the public internet, encrypted end
+to end.
+
+**NetBird** is the one you use. Devices that join it get a private address
+starting `100.` and can talk to each other as if they were on the same Wi-Fi,
+from anywhere — without opening any doors on your home router.
+
+The nicest part: two devices on the *same* Wi-Fi connect **directly** to each
+other, so the data never leaves the house.
+</Accordion>
+
+<Accordion title="Peer">
+One device that has joined the VPN. Your laptop, your phone, the edge VPS server
+— each is a peer.
+</Accordion>
+
+<Accordion title="Port forwarding — and why you don't do it">
+The usual way to expose a home server: tell your router to send outside traffic
+to a machine inside.
+
+**This setup deliberately doesn't.** Your router has no holes in it. Everything
+arrives at edge VPS first and comes in through the VPN tunnel. Nothing on the
+public internet can reach your laptop directly.
+</Accordion>
+</AccordionGroup>
+
+## Keeping it running
+
+<AccordionGroup>
+<Accordion title="systemd, units, services">
+The part of Linux that starts things and keeps them started. Each thing it
+manages is a **unit**; a unit that runs a program is a **service**.
+
+`systemctl start homelab-media` means "systemd, start Jellyfin". Because systemd
+knows about it, it also starts automatically after a reboot.
+</Accordion>
+
+<Accordion title="Timer">
+systemd's alarm clock. Runs something on a schedule — your backup timer fires at
+02:30 every night.
+</Accordion>
+
+<Accordion title="Fail closed">
+When a program can't be sure it's safe to continue, it **stops** instead of
+guessing.
+
+A door that locks when the power cuts, rather than springing open. Several
+scripts here refuse to run unless they can prove the data disk is genuinely
+mounted. Getting an error is the system protecting your data.
+</Accordion>
+
+<Accordion title="Idempotent">
+Safe to run twice. Running it again changes nothing extra.
+
+Almost every setup script here is idempotent, so if you're unsure whether a step
+worked, just run it again.
+</Accordion>
+
+<Accordion title="Watchdog">
+Something that checks whether things are running and restarts them if not.
+Yours checks every two minutes.
+</Accordion>
+</AccordionGroup>
+
+## Data and backups
+
+<AccordionGroup>
+<Accordion title="Database and PostgreSQL">
+An organised store for information — who your users are, which file is in which
+folder, who shared what.
+
+**PostgreSQL** is the database program here. Nextcloud keeps your *files* in
+folders, but everything *about* those files lives in the database. That's why
+backups need both.
+</Accordion>
+
+<Accordion title="Restic and snapshots">
+**Restic** is the backup program. Each backup is a **snapshot** — how everything
+looked at one moment.
+
+It's clever about space: if a file hasn't changed, it isn't stored twice. So
+daily snapshots cost far less than daily full copies. It's also encrypted, which
+is why losing the backup password means losing the backups.
+</Accordion>
+
+<Accordion title="Retention">
+How long you keep old snapshots. Yours: 7 daily, 4 weekly, 6 monthly. Older ones
+are deleted automatically so the disk doesn't fill up forever.
+</Accordion>
+
+<Accordion title="Restore drill">
+Actually testing that a backup can give data back, instead of assuming.
+
+<Tip>
+A backup you've never restored is a guess, not a backup. Yours is tested
+automatically once a month.
+</Tip>
+</Accordion>
+
+<Accordion title="Quota">
+A size limit on how much a user can store.
+
+<Warning>
+A quota is a **size limit, not a lock**. Here it applies *only* to a user's own
+personal folder. Shared folders are never counted, so a quota can't stop
+someone using space in a share, and can't be used to make someone read-only.
+</Warning>
+</Accordion>
+</AccordionGroup>
+
+## The services you're running
+
+| Name | What it does for you |
+|---|---|
+| **Nextcloud** | Your own Google Drive. Files, sync, sharing, calendar. |
+| **Jellyfin** | Your own Netflix, for media you already own. |
+| **Immich** | Your own Google Photos, with managed originals on the SSD and optional read-only external libraries. |
+| **PostgreSQL** | The database all of the above rely on. |
+| **Redis** | A scratchpad that keeps Nextcloud fast and stops two people corrupting the same file. |
+| **Portainer** | A web page for looking at your containers, instead of typing commands. |
+| **Traefik** | The receptionist on edge VPS that routes visitors and handles the padlock. |
+| **NetBird** | The private tunnel joining your devices. |
+| **Restic** | The backup program. |
+| **Beszel** | Watches how busy and full the machine is. |
+
+## Hardware words
+
+<AccordionGroup>
+<Accordion title="RAM vs disk">
+**RAM** is your desk — small, fast, wiped when you switch off. **Disk** is your
+filing cabinet — big, slower, remembers everything.
+
+Programs need desk space to work. Run out and the computer starts stacking
+papers on the floor (swap), which is when everything crawls.
+</Accordion>
+
+<Accordion title="SSD vs HDD">
+**SSD** has no moving parts and is fast. **HDD** has a spinning platter and is
+slower but cheaper per gigabyte. Your internal drive is an SSD; your data disk is
+a spinning drive.
+</Accordion>
+
+<Accordion title="USB 2.0 vs SATA">
+How fast a disk connection moves data. USB **2.0** is roughly 30 MB/s in
+practice; USB **3.0** is around ten times that; internal **SATA** is faster
+still, and is what the data disk uses now.
+
+The data disk *used* to negotiate USB 2.0, which was fine for playing a video
+(under 1 MB/s) but painful for a folder of photo thumbnails — hundreds of small
+reads at once. On YYYY-MM-DD it moved into an internal drive bay and measured
+64 MB/s. The bus is no longer the bottleneck; the 5400 RPM spindle is, so
+many-small-files work is still slower than on the SSD.
+</Accordion>
+
+<Accordion title="Hardware transcoding and QuickSync">
+**Transcoding** is converting a video on the fly so a device that can't play the
+original can. It's expensive work.
+
+**QuickSync** is a dedicated video chip built into your Intel processor that does
+it far faster than the main CPU, without heating the machine up. Jellyfin uses
+it — that's what makes video work on a small laptop.
+</Accordion>
+</AccordionGroup>

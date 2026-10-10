@@ -1,0 +1,25 @@
+[Unit]
+Description=Homelab networking (Pi-hole LAN DNS)
+Documentation=file://@REPO_ROOT@/guides/pihole-config.mdx
+# Pi-hole is infrastructure: it has no database or data-disk dependency.
+# Wait for both addresses because DNS is LAN-bound and the admin UI is
+# NetBird-bound. The explicit preflight gives a clear failure instead of a
+# cryptic Docker port-publish error.
+After=docker.service netbird.service network-online.target
+Requires=docker.service
+Wants=netbird.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=600
+WorkingDirectory=@REPO_ROOT@
+
+ExecStartPre=@REPO_ROOT@/operations/networking/check-prerequisites.sh
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/networking/docker-compose.yml up -d --wait
+
+# `stop`, not `down`: preserve the container and persistent configuration.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/networking/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,272 @@
+---
+title: "Homelab operator index"
+description: "A map for configuring, operating, and recovering the demo stacks."
+---
+
+This is the starting page for the repository. It describes a reference design
+and links to the operator procedures. Replace every demo value for your own
+environment before deployment. Keep live secrets outside Git, and review the
+edge overlay before applying it on a separate VPS.
+
+<Note>
+The examples use one system disk and a separately mounted data disk. Disk
+identifiers and addresses are placeholders; adapt mount paths and capacity to
+your host.
+</Note>
+
+## Choose a path
+
+<CardGroup cols={2}>
+<Card title="Build a fresh host" icon="wand-magic-sparkles" href="setup">
+Follow the complete, ordered installation procedure.
+</Card>
+<Card title="Understand the design" icon="sitemap" href="architecture">
+See the traffic paths, storage boundaries, ports, and safety decisions.
+</Card>
+<Card title="View the diagrams" icon="diagram-project" href="diagrams">
+Explore the infrastructure map and traffic and deployment flows.
+</Card>
+<Card title="Something is broken" icon="triangle-exclamation" href="runbook">
+Use symptom-first recovery steps and fail-closed checks.
+</Card>
+<Card title="Plan maintenance" icon="power-off" href="maintenance">
+Reboot, shut down, move disks, update software, and restore safely.
+</Card>
+<Card title="Use the local HTTPS edge" icon="network-wired" href="local-edge">
+Follow LAN DNS and HTTPS traffic from Pi-hole to each service.
+</Card>
+</CardGroup>
+
+## Current topology
+
+```text
+Remote/public client
+  -> the DNS provider public A record
+  -> edge VPS Traefik :443
+  -> NetBird overlay
+  -> homelab service on 100.64.0.10
+
+LAN client (same URLs, no NetBird required)
+  -> Pi-hole 192.0.2.10:53
+  -> local Traefik 192.0.2.10:443
+  -> the same homelab service ports
+```
+
+The home router has no port-forward. The four application hostnames are identical
+on both paths:
+
+| URL | Service | LAN answer | Remote path |
+|---|---|---|---|
+| `home.example.com` | Landing page | `192.0.2.10` | edge VPS |
+| `next.home.example.com` | Nextcloud | `192.0.2.10` | edge VPS -> NetBird |
+| `images.home.example.com` | Immich | `192.0.2.10` | edge VPS -> NetBird |
+| `media.home.example.com` | Jellyfin | `192.0.2.10` | edge VPS -> NetBird |
+
+See the [local HTTPS edge](local-edge) for the LAN path, [Pi-hole split DNS](pihole-config) for local name resolution, and [edge VPS NetBird DNS and policies](../integrations/edge-vps/homelab.yml) for the remote path.
+
+Portainer and the Pi-hole dashboard remain NetBird-only. Do not add them to the
+LAN DNS overrides or expose their ports through the router.
+
+## Storage map
+
+| Dataset | Host path | Used by | Write policy |
+|---|---|---|---|
+| SSD application state | `/srv/homelab/appdata` | databases, Nextcloud, Jellyfin, Immich, Pi-hole | service-specific |
+| Nextcloud primary data | `/srv/homelab/nextcloud-data` | Nextcloud | read/write |
+| Immich managed originals | `/srv/homelab/immich-data` | Immich | read/write; backed up |
+| protected SSD share | `/srv/homelab/shared-internal` | Nextcloud and Immich external library | read/write by approved users; backed up |
+| existing archive/tutorials | `/mnt/data` | Nextcloud and Jellyfin | Jellyfin read-only; archive is not backed up |
+| mergerfs SSD branch | `/srv/homelab/storage-branches/ssd` | bulk pool | pool-managed |
+| mergerfs HDD branch | `/mnt/data/.homelab/storage-branches/hdd` | bulk pool | pool-managed |
+| visible pool | `/mnt/storage` | Nextcloud `/Storage Pool` | bulk/replaceable only |
+
+`/mnt/storage` is a normal, visible filesystem path. The pool uses
+`category.create=pfrd` with 200 GiB reserved on the SSD and 50 GiB on the HDD.
+Mergerfs is not RAID or backup; branch paths remain the recovery paths. Never put
+PostgreSQL, Redis, Docker state, Immich originals, or Jellyfin's source library in
+the pool.
+
+## Fresh-install contract
+
+A fresh host must provide:
+
+- Ubuntu with a stable hostname and a reserved LAN address (the current host is
+  `192.0.2.10`).
+- Docker Engine, Compose v2, Git, Restic, mergerfs, NTFS support, `curl`, `jq`, and
+  OpenSSL.
+- NetBird, with a stable `wt0` address. Replace the current `100.64.0.10`
+  everywhere if the new host receives another address.
+- A edge VPS peer, its public Traefik routes, and the NetBird policy that permits
+  edge VPS to reach the homelab application ports.
+- The data-disk filesystem UUID recorded in both the data mount template and
+  `/etc/homelab/backup.env`. Never identify the disk by `/dev/sdX`.
+
+Host-specific values are intentionally visible in the repository so they can be
+reviewed. Before starting, run:
+
+```sh
+rg -n 'CHANGE_ME|DEMO_DATA_DISK_UUID|DEMO_HOME_FILESYSTEM_UUID' .
+```
+
+Review each match and replace only values that differ on the new host. Do not
+blindly replace a public edge VPS address with the homelab address.
+
+## Installation order
+
+The detailed commands are in [Build it from scratch](setup). The safe order is:
+
+<Steps>
+<Step title="Install packages, NetBird, and the repository">
+Install Docker/Compose, Restic, mergerfs, `jq`, and NTFS support. Join NetBird and
+confirm the expected `wt0` address. Clone this repository at
+`/srv/homelab-demo`.
+</Step>
+<Step title="Create and fill root-only secrets">
+Run `sudo ./operations/bootstrap/30-secrets.sh`. Fill every value in
+`/etc/homelab/*.env`; keep all files `root:root` mode `0600`. Never commit them.
+</Step>
+<Step title="Prepare and verify both disks">
+Run `00-preflight.sh`, `10-directories.sh`, and `20-networks.sh`. Start
+`mnt-data.mount`, run `operations/storage/init-disk-layout.sh`, then start
+`mnt-storage.mount` and verify it with `verify-pool.sh`.
+</Step>
+<Step title="Install and start systemd units">
+Run `50-systemd.sh`. Start databases first, then Nextcloud, media, Immich,
+networking, landing, management, and the watchdog timers. The installer enables
+the data and mergerfs mounts for future boots.
+</Step>
+<Step title="Configure the edges and applications">
+Apply the edge VPS dynamic configuration, sync the six certificates for the local
+edge, configure Pi-hole split DNS, finish the Nextcloud setup, and complete the
+Jellyfin and Immich wizards.
+</Step>
+<Step title="Validate and enable backups">
+Run the repository and host suites, test both LAN and remote URL paths, run one
+backup and one restore drill, then enable the recurring timers.
+</Step>
+</Steps>
+
+## Application-specific post-install work
+
+### Nextcloud
+
+`60-configure-nextcloud.sh` configures reverse-proxy trust, Redis locking, cron,
+mail, and the direct `Data` external storage. Add these Local External Storage
+entries in the Nextcloud administration UI when the pool is ready:
+
+| Display name | Container path | Host path |
+|---|---|---|
+| `Shared Internal` | `/mnt/internal-shared` | `/srv/homelab/shared-internal` |
+| `Data` | `/mnt/data` | `/mnt/data` |
+| `Storage Pool` | `/mnt/storage/nextcloud` | `/mnt/storage/nextcloud` |
+
+Keep Jellyfin's source read-only; Nextcloud `Data` and `Storage Pool` are
+read/write only for the groups you explicitly grant. Grant each external storage
+to explicit groups and remember that Nextcloud quotas do not count external storage.
+
+### Jellyfin
+
+Complete the first-run wizard at `https://media.home.example.com` (or the
+NetBird-bound address during bootstrap), enable QuickSync/VAAPI, and set the
+known proxy to the edge VPS peer. The media bind is `/media:ro`; do not change it
+to read/write.
+
+Create `/etc/homelab/jellyfin-api-key` as `root:root` mode `0600`, then run the
+idempotent helper:
+
+```sh
+sudo ./operations/media/sync-jellyfin-tutorial-libraries.sh       # dry run
+sudo ./operations/media/sync-jellyfin-tutorial-libraries.sh --apply
+```
+
+It creates one `musicvideos` library per immediate child of
+`/mnt/data/Tutorials`, preserves course folders underneath, ignores root ZIP
+files, never deletes libraries, and performs one global refresh after creation.
+New subjects require an intentional rerun.
+
+### Immich
+
+Immich managed originals are on `/srv/homelab/immich-data`; generated thumbnails,
+encoded video, profiles, and backups remain under
+`/srv/homelab/appdata/immich/generated`. This keeps the originals visible in a
+Linux file manager while preserving the application's expected `/data` layout.
+
+For the Example Album folder, add a read-only external library in Immich:
+
+```text
+Host source: /srv/homelab/shared-internal/Example Album
+Immich path: /mnt/shared-internal/Example Album
+Album:       Example Album
+```
+
+Immich indexes the files without copying them. After each UI Scan, configure
+`/etc/homelab/immich-album-sync.env` from its example and run:
+
+```sh
+sudo ./operations/media/sync-immich-folder-album.sh       # dry run
+sudo ./operations/media/sync-immich-folder-album.sh --apply
+```
+
+The helper updates album membership only; it never moves or deletes source files.
+
+## Validation checklist
+
+```sh
+cd /srv/homelab-demo
+sudo ./operations/tests/run-all.sh
+sudo ./operations/tests/run-all.sh --host
+sudo ./operations/networking/verify-pihole.sh
+sudo ./operations/storage/verify-disk.sh
+sudo ./operations/storage/verify-pool.sh
+sudo systemctl --failed
+sudo docker ps
+```
+
+From a LAN client with NetBird disconnected, the four application names must
+resolve to `192.0.2.10` and load over HTTPS. From mobile data or another
+external network, the same names must resolve to edge VPS and load through the
+public edge. Admin names must return `403` from outside the approved NetBird
+range.
+
+## Backups and recovery boundaries
+
+Enable the timers after the first successful backup:
+
+```sh
+sudo systemctl enable --now homelab-backup-internal.timer
+sudo systemctl enable --now homelab-backup-check.timer
+sudo systemctl enable --now homelab-restore-drill.timer
+sudo ./operations/backups/status.sh
+sudo ./operations/restore/drill.sh
+```
+
+The encrypted internal backup includes `appdata`, `immich-data`,
+`shared-internal`, `nextcloud-data`, database dumps, and staging data. It
+intentionally excludes the existing archive under `/mnt/data` and mergerfs bulk
+contents. Treat those unbacked paths as replaceable or maintain an independent
+copy before placing irreplaceable files there.
+
+## Rules that prevent data loss
+
+- Never run `docker compose down` for a normal stop; systemd uses `compose stop`.
+- Set `/etc/homelab/stack-hold` before deliberate maintenance so the watchdog
+  cannot restart a service underneath you.
+- If `/mnt/data` is absent, do not create files under the empty mountpoint.
+  `verify-disk.sh` and the service gates are supposed to refuse the start.
+- Keep secrets, API keys, and private keys outside Git.
+- After a reboot, check mounts, failed units, container health, and the host suite
+  before accepting uploads.
+
+## Repository map
+
+| Area | Purpose |
+|---|---|
+| `runtime/compose/` | Pinned Compose projects and bind mounts |
+| `operations/bootstrap/` | Idempotent host setup and systemd rendering |
+| `operations/storage/` | Disk, pool, permissions, and degraded mode |
+| `operations/media/` | Jellyfin tutorial and Immich album helpers |
+| `operations/backups/`, `operations/restore/` | Restic and database restore paths |
+| `operations/tests/` | Repository, host, listener, and fail-closed checks |
+| `integrations/edge-vps/` | Public Traefik and NetBird artifacts; apply on edge VPS |
+
+For every command and its safety behavior, use the [script reference](scripts).

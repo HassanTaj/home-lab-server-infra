@@ -1,0 +1,311 @@
+---
+title: "Build it from scratch"
+description: "An ordered installation procedure for reproducing the current homelab on a clean Ubuntu host."
+---
+
+Use this page when creating a new host. For the design map and the current
+service/storage contract, start with the [operator index](index). Do not skip the
+order: several checks deliberately fail until the previous step is complete.
+
+<Warning>
+This procedure assumes the current architecture: one Ubuntu host, one native
+SSD at `/srv`, one NTFS disk at `/mnt/data`, an edge VPS public edge, and NetBird.
+It never formats a disk and never moves existing `/mnt/data` content.
+</Warning>
+
+## 1. Prepare the host
+
+Install Ubuntu, reserve the homelab address on the router, and make sure the
+machine has a stable hostname. Install the packages used by the repository:
+
+```sh
+sudo apt update
+sudo apt install -y docker.io docker-compose-v2 restic git curl jq openssl mergerfs ntfs-3g
+sudo systemctl enable --now docker
+```
+
+Install and join NetBird using its official installer, then confirm the interface
+and address expected by the Compose files:
+
+```sh
+curl -fsSL https://pkgs.netbird.io/install.sh | sudo bash
+sudo netbird up
+sudo netbird status
+ip -4 addr show wt0
+```
+
+The current host uses `100.64.0.10`. A replacement host may receive another
+address; update every matching host-specific value after reviewing:
+
+```sh
+cd /srv/homelab-demo
+rg -n 'CHANGE_ME|DEMO_DATA_DISK_UUID|DEMO_HOME_FILESYSTEM_UUID' .
+```
+
+## 2. Install the repository
+
+```sh
+sudo mkdir -p /srv
+cd /srv
+sudo git clone <repository-url> homelab-server
+cd /srv/homelab-demo
+```
+
+If the repository lives elsewhere, run `50-systemd.sh` again after moving it;
+the unit templates contain the absolute repository path.
+
+## 3. Set host-specific disk values
+
+List filesystems and record the UUID of the NTFS data partition:
+
+```sh
+lsblk -f
+sudo blkid
+```
+
+Before rendering systemd units, set the same UUID in:
+
+- `operations/storage/systemd/mnt-data.mount.in` (`What=/dev/disk/by-uuid/...`)
+- `/etc/homelab/backup.env` (`DATA_UUID=...`, created in the next step)
+
+The SSD UUID is checked by `verify-pool.sh` through `operations/lib/common.sh`.
+Do not substitute `/dev/sdb1` in a unit; device names can change across boots.
+
+## 4. Create secrets
+
+```sh
+sudo ./operations/bootstrap/30-secrets.sh
+sudo ./operations/bootstrap/30-secrets.sh --show
+```
+
+Store the generated values in a password manager, especially
+`RESTIC_PASSWORD_INTERNAL`. Edit the root-only files under `/etc/homelab/` and
+replace every `CHANGE_ME` value:
+
+- `databases.env` and `nextcloud.env`: matching Nextcloud database password
+- `redis.env` and `nextcloud.env`: matching Redis password
+- `nextcloud.env`: administrator, SMTP, and the real edge VPS NetBird IP in
+  `TRUSTED_PROXIES`
+- `backup.env`: the data UUID and offline Restic password
+- `immich.env`: Immich's own database password
+- `pgadmin.env`: the NetBird-only admin password
+
+Keep the files `root:root` with mode `0600`. The scripts refuse weaker
+permissions and never print secret values.
+
+## 5. Build the host layout and mounts
+
+Run the read-only checks before anything mutates the host:
+
+```sh
+sudo ./operations/tests/run-all.sh
+sudo ./operations/bootstrap/00-preflight.sh
+```
+
+Create directories and the external Docker network, then render and enable all
+systemd units:
+
+```sh
+sudo ./operations/bootstrap/10-directories.sh
+sudo ./operations/bootstrap/20-networks.sh
+sudo ./operations/bootstrap/50-systemd.sh
+```
+
+Mount the data disk and create only the protected `.homelab` metadata/backup and
+mergerfs-branch directories. Existing files are preserved:
+
+```sh
+sudo systemctl start mnt-data.mount
+sudo ./operations/storage/init-disk-layout.sh
+sudo systemctl start mnt-storage.mount
+sudo ./operations/storage/verify-disk.sh
+sudo ./operations/storage/verify-pool.sh
+```
+
+`50-systemd.sh` enables both `mnt-data.automount` and `mnt-storage.mount` so the
+mounts return after reboot. If the data disk is missing, stop here; never write
+under the empty `/mnt/data` mountpoint.
+
+## 6. Start the services
+
+Start the independent infrastructure first. The units are oneshot launchers;
+the Docker containers are the long-running processes:
+
+```sh
+sudo ./operations/networking/install-secret.sh
+sudo systemctl start homelab-databases.service
+sudo systemctl start homelab-networking.service
+sudo systemctl start homelab-landing.service
+sudo systemctl start homelab-immich.service
+sudo systemctl start homelab-management.service
+sudo systemctl start homelab-media.service
+sudo systemctl start homelab-nextcloud.service
+sudo systemctl enable --now homelab-stack-watchdog.timer
+```
+
+The local HTTPS edge needs the existing edge VPS certificates. Configure and
+validate the edge VPS side first, then pull the six certificates and start it:
+
+```sh
+sudo ./operations/edge/sync-certificates.sh
+sudo systemctl start homelab-local-edge.service
+sudo systemctl enable --now homelab-local-edge-certsync.timer
+```
+
+If the certificate sync cannot reach edge VPS, do not disable TLS validation or
+copy private keys into the repository. Keep the local edge stopped until the
+validated export path works.
+
+## Optional monitoring
+
+Cockpit is a NetBird-only host console. Beszel is an agent reporting to the
+existing edge VPS hub; both are optional to the application stack:
+
+```sh
+sudo ./operations/monitoring/install-cockpit.sh
+sudo BESZEL_VERSION=<pinned-release> ./operations/monitoring/install-beszel.sh
+# Add the agent in the edge VPS hub, fill /etc/homelab/beszel.env, then:
+sudo systemctl enable --now beszel-agent.service
+```
+
+Never bind either administration surface to the LAN or a wildcard address.
+
+## 7. Configure the public and LAN edges
+
+On edge VPS, follow [the edge VPS integration guide](../integrations/edge-vps/homelab.yml)
+and apply `integrations/edge-vps/homelab.yml` only after taking a rollback copy.
+The public A records for `next.home`, `images.home`, and `media.home` point to
+edge VPS's public address. NetBird policies allow only the required homelab
+backend ports.
+
+On the home LAN, Pi-hole owns `192.0.2.10:53` and overrides the four
+application names to `192.0.2.10`. Follow [Pi-hole split DNS](pihole-config)
+and then [the WAN provider cutover](router-dns-cutover) if the router should advertise
+Pi-hole automatically. Do not add a public secondary DNS server: it bypasses
+local resolution. Do not create router port forwards.
+
+Validate both paths before handing the URLs to users:
+
+```sh
+sudo ./operations/networking/verify-pihole.sh
+curl --resolve next.home.example.com:443:192.0.2.10 https://next.home.example.com/status.php
+curl --resolve images.home.example.com:443:192.0.2.10 https://images.home.example.com/api/server/ping
+curl --resolve media.home.example.com:443:192.0.2.10 https://media.home.example.com/health
+```
+
+From mobile data, repeat the URLs without `--resolve`; they must reach edge VPS.
+
+## 8. Finish Nextcloud
+
+If the image did not auto-install from the values in `nextcloud.env`, run the
+initial install inside the web container using the values already loaded there:
+
+```sh
+sudo docker exec -u www-data homelab-nextcloud sh -c '
+  php occ maintenance:install \
+    --database pgsql --database-host homelab-postgres \
+    --database-name nextcloud --database-user nextcloud \
+    --database-pass "$POSTGRES_PASSWORD" \
+    --admin-user "$NEXTCLOUD_ADMIN_USER" \
+    --admin-pass "$NEXTCLOUD_ADMIN_PASSWORD" \
+    --data-dir /var/www/html/data'
+```
+
+Apply the repository-managed settings:
+
+```sh
+sudo ./operations/bootstrap/60-configure-nextcloud.sh
+```
+
+In the administration UI, confirm the existing `Shared Internal` and `Data`
+external storages, then add `Storage Pool` with container path
+`/mnt/storage/nextcloud`. Grant storage to groups deliberately; quotas do not
+cover external storage. After terminal copies into a share, run
+`operations/storage/fix-share-permissions.sh`.
+
+## 9. Finish Jellyfin
+
+Complete the first-run wizard at `https://media.home.example.com`, set the
+known edge VPS proxy, and enable Intel QuickSync/VAAPI. The only media bind is
+`/media:ro`, so Jellyfin cannot delete the source archive.
+
+Create a root-only API-key file and generate the subject libraries:
+
+```sh
+sudo install -o root -g root -m 0600 /dev/null /etc/homelab/jellyfin-api-key
+sudoedit /etc/homelab/jellyfin-api-key
+sudo ./operations/media/sync-jellyfin-tutorial-libraries.sh
+sudo ./operations/media/sync-jellyfin-tutorial-libraries.sh --apply
+```
+
+The helper creates one `musicvideos` library for each immediate child of
+`/mnt/data/Tutorials`; it preserves every course folder below the subject,
+ignores root ZIP files, and never deletes existing libraries.
+
+## 10. Finish Immich and Example Album
+
+Immich stores managed originals under `/srv/homelab/immich-data`. Generated
+files stay in `/srv/homelab/appdata/immich/generated`. Create the Example Album
+external library in the Immich UI:
+
+```text
+Host:   /srv/homelab/shared-internal/Example Album
+Inside: /mnt/shared-internal/Example Album
+Album:  Example Album
+```
+
+The external library is read-only and indexes files without copying them. After
+clicking Scan, fill `/etc/homelab/immich-album-sync.env` from
+`runtime/environments/examples/immich-album-sync.example.env` and run:
+
+```sh
+sudo ./operations/media/sync-immich-folder-album.sh
+sudo ./operations/media/sync-immich-folder-album.sh --apply
+```
+
+## 11. Backups, timers, and acceptance
+
+Enable the backup and restore timers only after the first successful backup:
+
+```sh
+sudo systemctl enable --now homelab-backup-internal.timer
+sudo systemctl enable --now homelab-backup-check.timer
+sudo systemctl enable --now homelab-restore-drill.timer
+sudo ./operations/backups/backup-internal-to-disk.sh
+sudo ./operations/restore/drill.sh
+```
+
+The internal Restic repository protects application state, Nextcloud data,
+Immich originals, Shared Internal, and database dumps. It does not protect the
+pre-existing `/mnt/data` archive or mergerfs pool contents. Maintain another
+copy before treating those paths as irreplaceable.
+
+Finish with:
+
+```sh
+sudo ./operations/tests/run-all.sh --host
+sudo systemctl --failed
+sudo docker ps
+findmnt /mnt/data
+findmnt /mnt/storage
+```
+
+All expected containers should be `Up`/`healthy`, there should be no failed unit,
+and both mountpoints must be real mounts. After a reboot, repeat this same
+acceptance check before accepting new uploads.
+
+## If the build stops
+
+- Missing `/mnt/data`: run `operations/storage/verify-disk.sh`; do not create a
+  fallback directory or start Nextcloud/Jellyfin.
+- Missing `/mnt/storage`: install mergerfs, confirm both branch markers, then run
+  `systemctl start mnt-storage.mount` and `verify-pool.sh`.
+- Public URL fails: validate edge VPS DNS, Traefik, and NetBird separately; do not
+  change the LAN edge to compensate.
+- Local URL fails: query Pi-hole directly and confirm `192.0.2.10:443` is
+  listening; remote access should remain unaffected.
+- A service is deliberately stopped: create `/etc/homelab/stack-hold` first so the
+  watchdog does not immediately start it.
+
+For symptom-first recovery, use [Something's wrong](runbook). For every script's
+contract, use [Every script explained](scripts).

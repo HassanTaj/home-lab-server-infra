@@ -1,0 +1,34 @@
+# Degraded mode: run Nextcloud WITHOUT the data disk.
+#
+# For the case the disk is dead, lost, or deliberately retired. Everything on the
+# internal SSD -- nextcloud-data, appdata/nextcloud/html, shared-internal -- is
+# served normally; only the two data-disk external storages go offline.
+#
+# Applied by operations/storage/nextcloud-degraded.sh, never by hand: the script
+# also repoints the data-disk external storages and installs the systemd drop-in that
+# lifts the data-disk requirement. Using this file on its own would start Nextcloud
+# with the data-disk storages still pointing at a path that is not the disk.
+#
+# WHY A FILE AND NOT AN EMPTY DIRECTORY:
+#
+# Compose cannot delete a volume entry declared in the base file, only override
+# the source for a given target. The obvious override -- an empty directory on
+# the SSD -- is precisely the dangerous case: Nextcloud's scanner would list the
+# `/Data` external storage, find it EMPTY, purge every entry from
+# oc_filecache, and sync clients would then delete the users' local copies. A
+# temporary unplug would become permanent deletion on people's laptops.
+#
+# Binding a regular FILE over /mnt/data makes that impossible. The Local
+# backend's is_dir() check fails, so Nextcloud reports "Storage not available"
+# instead of "empty", and an unavailable storage is never scanned. Docker also
+# cannot silently turn a file bind into a directory the way it auto-creates a
+# missing directory source.
+
+services:
+  nextcloud:
+    volumes:
+      - /srv/homelab/data-offline.marker:/mnt/data:ro
+
+  cron:
+    volumes:
+      - /srv/homelab/data-offline.marker:/mnt/data:ro

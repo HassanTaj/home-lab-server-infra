@@ -1,0 +1,16 @@
+[Unit]
+Description=Homelab backup: internal data and database dumps to data disk Restic
+Documentation=file://@REPO_ROOT@/guides/runbook.md
+After=homelab-databases.service homelab-nextcloud.service mnt-data.mount
+RequiresMountsFor=/mnt/data
+# If the data disk is absent the script fails closed; that is the intended result.
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+ExecStart=@REPO_ROOT@/operations/backups/backup-internal-to-disk.sh
+TimeoutStartSec=6h
+# Keep this modest: the host has 8 GB total and Nextcloud must stay responsive.
+MemoryMax=1G
+CPUQuota=60%

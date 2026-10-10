@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly Homelab Restic repository check
+
+[Timer]
+OnCalendar=Sun *-*-* 05:30:00
+RandomizedDelaySec=30m
+Persistent=yes
+Unit=homelab-backup-check.service
+
+[Install]
+WantedBy=timers.target

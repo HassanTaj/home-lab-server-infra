@@ -1,0 +1,58 @@
+# Temporary reference repositories are local-only.
+/Refference/
+/References/
+/Refferences/
+/Generated Files/
+
+# Live environment files and local overrides.
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+
+# Keep sanitized environment examples trackable.
+!**/example.env
+!**/*.example.env
+!**/.env.example
+!**/*.env.example
+
+# Secrets, certificates and keys must never be tracked.
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+*.jks
+*.kdbx
+!**/*.example.pem
+
+# Database dumps and archives.
+*.sql
+*.sql.gz
+*.dump
+*.dump.gz
+*.tar.gz
+*.tgz
+
+# Restic repositories and backup working state.
+# NOTE: scoped deliberately. A bare `**/backups/` would also exclude
+# operations/backups/, which holds tracked scripts and systemd units.
+/backups/
+**/backup-staging/
+**/restore-*/
+**/drill-*/
+*.partial
+
+# Runtime data that must never enter Git.
+runtime/data/
+**/appdata/
+**/nextcloud-data/
+
+# Generated evidence and local scratch output.
+evidence/
+**/*.local.*
+*.log
+
+# Old WireGuard peer configs contain private key material.
+/wg-home.conf

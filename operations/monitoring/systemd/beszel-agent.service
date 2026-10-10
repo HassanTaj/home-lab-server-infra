@@ -1,0 +1,43 @@
+[Unit]
+Description=Beszel agent (pinned @VERSION@) monitored by the edge VPS hub
+Documentation=https://beszel.dev
+# NetBird must be up: the agent binds the overlay address and the unit fails if
+# that address does not exist yet.
+After=network-online.target netbird.service
+Wants=network-online.target netbird.service
+
+[Service]
+Type=simple
+User=beszel
+Group=beszel
+EnvironmentFile=/etc/homelab/beszel.env
+
+# PULL MODEL, matching the hub's own agent on edge VPS: this agent listens and the
+# hub dials in, authenticating with the hub's public key (KEY).
+#
+# LISTEN is the NetBird address only, never 0.0.0.0. Left unset the agent binds
+# every interface, which would expose host and container metrics to the LAN.
+# Reaching it still requires a NetBird policy permitting edge-vps-edge -> homelab
+# on this port, so the overlay is not open by default either.
+ExecStart=/usr/local/bin/beszel-agent --listen ${LISTEN} --key ${KEY}
+
+Restart=on-failure
+RestartSec=15
+
+# low-memory host budget.
+MemoryMax=128M
+CPUQuota=15%
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+# Needed to read container stats.
+SupplementaryGroups=docker
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,96 @@
+---
+title: "Local HTTPS edge"
+description: "LAN-local HTTPS for homelab services while edge VPS remains the public edge."
+---
+
+The homelab now has a small Traefik edge bound to `192.0.2.10:443`. Pi-hole
+answers the application names with that address for LAN clients, so local
+requests do not travel to Germany and back. edge VPS continues to serve the same
+names for public and remote clients over NetBird.
+
+For the full service and storage design, see [How it works](architecture). The
+LAN DNS setup is in [Pi-hole split DNS](pihole-config); edge VPS's public routes
+and overlay policies are covered by the [edge VPS integration](../integrations/edge-vps/homelab.yml).
+
+## Traffic paths
+
+```text
+LAN client -> Pi-hole (192.0.2.10:53)
+           -> local Traefik (192.0.2.10:443)
+           -> service on the host's NetBird address (100.64.0.10)
+
+Remote/public client -> edge VPS Traefik -> NetBird -> homelab service
+```
+
+The local edge has no HTTP listener, no Docker socket, and no public port
+forward. Public exposure and ACME renewal remain edge VPS responsibilities.
+
+## Hostnames and access
+
+| Hostname | LAN route | Access policy |
+|---|---|---|
+| `home.example.com` | landing page | `192.0.2.0/24` only |
+| `next.home.example.com` | Nextcloud | `192.0.2.0/24` only |
+| `images.home.example.com` | Immich | `192.0.2.0/24` only |
+| `media.home.example.com` | Jellyfin | `192.0.2.0/24` only |
+| `assistant.home.example.com` | Home Assistant (Yui) | `192.0.2.0/24` only; remote route remains NetBird-only |
+| `pihole.home.example.com` | Pi-hole dashboard | NetBird `100.64.0.0/10` only |
+| `portainer.home.example.com` | Portainer | NetBird `100.64.0.0/10` only |
+
+The public hostnames, TLS behavior, rate limits, and security headers mirror the
+edge VPS routes. The local router does not issue certificates. Instead,
+`operations/edge/sync-certificates.sh` pulls only these seven existing certificates
+from edge VPS's ACME store over the already-working homelab-to-edge VPS SSH path.
+
+Private keys are never printed or committed. They are stored root-owned under
+`/srv/homelab/appdata/local-edge/certs` with mode `0600`; certificates are
+`0644`. The exporter fails closed if any selected name, certificate, or key is
+missing, and the sync validates expiry, hostname coverage, and key/certificate
+matching before replacing a file.
+
+## Services and renewal
+
+* `homelab-local-edge-certsync.service` performs one synchronization.
+* `homelab-local-edge-certsync.timer` repeats it every 30 minutes.
+* `homelab-local-edge.service` runs the pinned Traefik image and binds only the
+  exact LAN address on TCP 443.
+
+edge VPS's existing TLS-ALPN-01 resolver remains unchanged. When it renews a
+certificate, the next timer run notices the changed bytes and atomically updates
+the local copy. If synchronization fails, the old known-good files remain in
+place and the local edge keeps serving them until their seven-day safety window.
+
+## Validation
+
+Run these on the homelab as root:
+
+```sh
+sudo operations/edge/sync-certificates.sh
+sudo systemctl start homelab-local-edge.service
+sudo systemctl --no-pager status homelab-local-edge.service
+sudo ss -ltnp | grep '192.0.2.10:443'
+dig @192.0.2.10 next.home.example.com
+curl --resolve next.home.example.com:443:192.0.2.10 \
+  https://next.home.example.com/status.php
+curl --resolve images.home.example.com:443:192.0.2.10 \
+  https://images.home.example.com/api/server/ping
+curl --resolve media.home.example.com:443:192.0.2.10 \
+  https://media.home.example.com/health
+```
+
+The `curl` status can be `200`, `302`, or an application-auth response as
+appropriate; the important checks are the trusted certificate, the local
+destination, and a Traefik access-log entry. Pi-hole query logs should show the
+LAN answer for each application name.
+
+## Rollback
+
+To stop only the new LAN edge, run:
+
+```sh
+sudo systemctl disable --now homelab-local-edge.service
+sudo systemctl disable --now homelab-local-edge-certsync.timer
+```
+
+edge VPS is not changed by this rollback. Pi-hole overrides can remain staged, or
+be removed separately before the router advertises Pi-hole to clients.

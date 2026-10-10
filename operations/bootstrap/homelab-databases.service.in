@@ -1,0 +1,31 @@
+[Unit]
+Description=Homelab databases (PostgreSQL)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# Deliberately has NO dependency on the data disk. Nothing in this project binds
+# a path under /mnt/data, so a disk fault must not be able to
+# stop PostgreSQL. See README "Why the stack is split into three units".
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=600
+WorkingDirectory=@REPO_ROOT@
+
+# The shared homelab-db network is declared `external: true` by both the
+# databases and nextcloud projects, so it must exist before Compose runs.
+# The script is idempotent and re-creates it only if it is genuinely absent.
+ExecStartPre=@REPO_ROOT@/operations/bootstrap/20-networks.sh
+
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/databases/docker-compose.yml up -d --wait
+ExecStart=@REPO_ROOT@/operations/bootstrap/40-database-roles.sh
+
+# `stop`, NOT `down`. On YYYY-MM-DD a brief storage interruption cascade-stopped
+# the old single unit and its `down` ExecStop DESTROYED every container and
+# network, turning a transient hardware blip into a permanent outage that looked
+# like data loss. `stop` leaves the containers in place so a restart is a no-op.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/databases/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

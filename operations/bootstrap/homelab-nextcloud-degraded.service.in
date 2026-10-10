@@ -1,0 +1,45 @@
+[Unit]
+Description=Homelab Nextcloud, DEGRADED (running without the data disk)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# The diskless counterpart of homelab-nextcloud.service, for when the disk is
+# dead, lost or deliberately retired. Almost all of Nextcloud's data is on the
+# internal SSD (nextcloud-data, appdata/nextcloud/html, shared-internal); only
+# the two data-disk external storages need the disk, so a dead disk should not mean a
+# total Nextcloud outage.
+#
+# THIS IS A SEPARATE UNIT ON PURPOSE. The obvious implementation -- a drop-in on
+# homelab-nextcloud.service that blanks RequiresMountsFor= -- DOES NOT WORK.
+# systemd treats RequiresMountsFor= and the Requires= it generates as additive
+# only; an empty assignment does not reset them. Verified on systemd 257:
+# the drop-in was installed and `systemctl show -p RequiresMountsFor` still
+# reported /mnt/data, so a disk loss would have cascade-stopped the very
+# unit that is supposed to survive it. Hence two units and Conflicts=.
+#
+# Conflicts= is implicitly symmetric, so starting either unit stops the other and
+# the two can never both hold the same containers.
+Conflicts=homelab-nextcloud.service
+After=docker.service netbird.service homelab-databases.service
+Requires=docker.service homelab-databases.service
+Wants=netbird.service
+
+# Deliberately absent: RequiresMountsFor=/mnt/data and the
+# verify-disk.sh ExecStartPre. Both are the point of the normal unit and both
+# would prevent this one from ever starting.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=900
+WorkingDirectory=@REPO_ROOT@
+
+# The override binds a regular FILE over /mnt/data so the data disk external
+# storages report "Storage not available" rather than appearing empty. An empty
+# directory there would make Nextcloud's scanner purge every data-disk entry from
+# oc_filecache -- many rows as of YYYY-MM-DD -- and propagate the deletions
+# to every sync client. See the header of docker-compose.degraded.yml.
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/nextcloud/docker-compose.yml -f @REPO_ROOT@/runtime/compose/nextcloud/docker-compose.degraded.yml up -d --wait
+
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/nextcloud/docker-compose.yml -f @REPO_ROOT@/runtime/compose/nextcloud/docker-compose.degraded.yml stop
+
+[Install]
+WantedBy=multi-user.target

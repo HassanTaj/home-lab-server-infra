@@ -1,0 +1,23 @@
+---
+title: Home Lab Server Infrastructure Demo
+description: A sanitized reference implementation for a self-hosted home lab.
+---
+
+This demo documents the Docker Compose stacks, host operations, storage and backup workflows, network boundaries, and deployment paths for a self-hosted server.
+
+The reference host runs Ubuntu 26.04.1 LTS on an Intel Core i5-7200U with 16 GB RAM, a 1 TB SSD, and a separate 1 TB data disk. Adapt the examples to your own hardware and environment.
+
+## Start here
+
+- [Operator index](/guides/index) maps the stacks and their dependencies.
+- [Setup guide](/guides/setup) explains configuration and deployment order.
+- [Architecture](/guides/architecture) documents network, storage, and failure boundaries.
+- [Infrastructure and flow diagrams](/guides/diagrams) show the network layout, request paths, and deployment sequence.
+- [Runbook](/guides/runbook) covers common service and recovery tasks.
+- [Script reference](/guides/scripts) explains the operational scripts.
+
+## Safety
+
+This is a demo, not a ready-to-deploy configuration. Replace example hostnames, addresses, disk identifiers, paths, credentials, and firewall rules before use. Environment templates contain placeholders only. Keep live `.env` files, private keys, certificates, database data, and backup repositories outside Git.
+
+Storage and teardown scripts can change or remove data. Review their target paths and safeguards before running them.

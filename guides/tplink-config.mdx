@@ -1,0 +1,38 @@
+---
+title: "Router and access point setup"
+description: "Keep one router in charge of DHCP and stage a second access point safely."
+---
+
+This guide describes a generic two-device home network. Replace the example
+addresses with values from your router before applying changes.
+
+## Choose one DHCP server
+
+Use one device as the router and DHCP server. If a second device only extends
+Wi-Fi coverage, configure it as an access point and disable its DHCP server.
+Give each device a reserved management address outside the pool handed to
+clients.
+
+```text
+Internet -> main router / DHCP -> LAN clients
+                         `----> access point (DHCP disabled)
+```
+
+The addresses in this repository's examples use documentation ranges; they
+cannot be used on a real network. Write down the current router address, DHCP
+pool, DNS settings, and access point address before making changes.
+
+## Rollout checklist
+
+1. Confirm you can reach both devices and have their local administrator
+   credentials available.
+2. Configure the secondary device in access point mode, or disable its DHCP
+   server and connect it using the vendor's documented topology.
+3. Verify a wireless client receives an address and gateway from the main
+   router.
+4. Verify local DNS and internet access before changing the main router's DHCP
+   DNS option.
+5. Keep a wired client and the previous settings available for rollback.
+
+Vendor menus differ. Follow the manual for the specific hardware and firmware;
+do not assume that similarly named modes behave the same way.

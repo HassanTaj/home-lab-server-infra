@@ -1,0 +1,81 @@
+---
+title: "Infrastructure and request flows"
+description: "Network, storage, and deployment diagrams for the sanitized demo stacks."
+---
+
+These diagrams describe the reference implementation. Addresses and hostnames in
+the configuration are placeholders; review them before deployment.
+
+## Infrastructure overview
+
+```mermaid
+flowchart LR
+  subgraph Remote[Remote access]
+    Internet[Internet clients] --> PublicDNS[Public DNS]
+    PublicDNS --> Edge[Edge VPS Traefik]
+    Edge --> Overlay[NetBird overlay]
+  end
+
+  subgraph Home[Homelab host]
+    Overlay --> Services[NetBird-bound service ports]
+    LAN[LAN clients] --> PiHole[Pi-hole DNS]
+    PiHole --> LocalEdge[Local Traefik HTTPS]
+    LocalEdge --> Services
+    Services --> Apps[Nextcloud · Jellyfin · Immich · Home Assistant]
+    Services --> Admin[Portainer · Pi-hole dashboard]
+    Services --> DB[PostgreSQL · Redis · Immich database]
+    Apps --> State[/srv/homelab app state/]
+    Apps --> Data[/mnt/data mounted library/]
+    State --> Backup[Encrypted Restic backup]
+    Data -. separate backup policy .-> Backup
+  end
+
+  Admin -. private overlay policy .-> Overlay
+```
+
+The public DNS and edge path serves only the routes configured in the edge
+overlay. Administrative services should remain behind the private overlay policy.
+The diagram shows a possible data disk backup relationship; configure backup
+coverage explicitly for each dataset.
+
+## Request flow
+
+```mermaid
+sequenceDiagram
+  actor Client
+  participant DNS as DNS resolver
+  participant Edge as Edge VPS or local Traefik
+  participant Tunnel as NetBird overlay
+  participant App as Homelab service
+
+  alt Client on LAN
+    Client->>DNS: Resolve service hostname
+    DNS-->>Client: Homelab LAN address
+    Client->>Edge: HTTPS request to local Traefik
+    Edge->>App: Forward to backend
+  else Remote client
+    Client->>DNS: Resolve public service hostname
+    DNS-->>Client: Edge VPS address
+    Client->>Edge: HTTPS request to edge Traefik
+    Edge->>Tunnel: Forward over private overlay
+    Tunnel->>App: Reach bound service port
+  end
+  App-->>Client: Service response
+```
+
+## Deployment flow
+
+```mermaid
+flowchart TD
+  Repo[Review repository and host assumptions] --> Values[Set demo paths, addresses, disk IDs, and secrets]
+  Values --> Preflight[Run read-only preflight]
+  Preflight --> Storage[Verify mounts and initialize directories]
+  Storage --> Network[Create networks and root-only secret files]
+  Network --> Database[Start database services]
+  Database --> Apps[Start application stacks]
+  Apps --> Units[Install systemd units and timers]
+  Units --> Verify[Run repository checks and host acceptance checks]
+  Verify --> Ready[Accept service traffic]
+```
+
+Read the [setup guide](setup) for the command sequence and safety gates.

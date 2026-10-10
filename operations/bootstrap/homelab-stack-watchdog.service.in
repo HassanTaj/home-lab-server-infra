@@ -1,0 +1,13 @@
+[Unit]
+Description=Homelab stack watchdog (restart anything found down)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+After=docker.service
+# Not Requires=: if Docker itself is down there is nothing useful to do, and
+# the watchdog should not drag docker.service around.
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=@REPO_ROOT@/operations/bootstrap/stack-watchdog.sh
+TimeoutStartSec=900

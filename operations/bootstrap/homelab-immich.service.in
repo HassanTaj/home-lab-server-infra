@@ -1,0 +1,30 @@
+[Unit]
+Description=Homelab Immich (photos, ML search, own PostgreSQL)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# Deliberately NO data-disk dependency. The photo library lives on the internal SSD, so
+# Immich must not be gated on the removable disk -- and more importantly, if it
+# ever pointed at an absent library it would look like "every photo was deleted",
+# the same trap Nextcloud and Jellyfin are gated against.
+#
+# Immich brings its own PostgreSQL 14 with VectorChord, so this unit does NOT
+# depend on homelab-databases.service. See the compose file for why sharing the
+# 18 instance is not possible.
+After=docker.service netbird.service
+Requires=docker.service
+Wants=netbird.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# First start runs database migrations and the ML container downloads its models,
+# so allow generously more time than the other units.
+TimeoutStartSec=1800
+WorkingDirectory=@REPO_ROOT@
+
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/immich/docker-compose.yml up -d --wait
+
+# `stop`, not `down` -- see the note in homelab-databases.service.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/immich/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

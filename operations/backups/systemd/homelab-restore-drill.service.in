@@ -1,0 +1,13 @@
+[Unit]
+Description=Homelab monthly restore drill
+After=mnt-data.mount homelab-databases.service homelab-nextcloud.service
+RequiresMountsFor=/mnt/data
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=@REPO_ROOT@/operations/restore/drill.sh
+TimeoutStartSec=8h
+MemoryMax=1G
+CPUQuota=50%

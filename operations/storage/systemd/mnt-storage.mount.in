@@ -1,0 +1,18 @@
+[Unit]
+Description=Homelab mergerfs bulk storage pool
+Documentation=file://@REPO_ROOT@/guides/architecture.mdx
+Requires=mnt-data.mount
+After=mnt-data.mount
+Before=homelab-nextcloud.service
+ConditionPathIsDirectory=/srv/homelab/storage-branches/ssd
+ConditionPathIsDirectory=/mnt/data/.homelab/storage-branches/hdd
+
+[Mount]
+What=/srv/homelab/storage-branches/ssd=RW,200G:/mnt/data/.homelab/storage-branches/hdd=RW,50G
+Where=/mnt/storage
+Type=fuse.mergerfs
+Options=allow_other,cache.files=off,category.create=pfrd,func.getattr=newest,dropcacheonclose=true,xattr=passthrough,fsname=homelab-storage
+TimeoutSec=30
+
+[Install]
+WantedBy=multi-user.target

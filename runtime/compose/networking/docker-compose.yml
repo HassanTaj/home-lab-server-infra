@@ -1,0 +1,72 @@
+name: homelab-networking
+
+# LAN DNS for split-horizon application names. This project deliberately does
+# not provide DHCP: WAN provider remains the only DHCP server after the LAN router was
+# converted to Access Point mode.
+
+services:
+  pihole:
+    # Pi-hole Docker 2026.07.2. Digest resolved YYYY-MM-DD for linux/amd64.
+    image: pihole/pihole:2026.07.2@sha256:7c96327ecfb96dbc74b0a47d073dbef7d60526e0aa87519b2a2f7a0007cb5c88
+    container_name: homelab-pihole
+    hostname: pihole
+    restart: unless-stopped
+
+    environment:
+      TZ: Asia/Karachi
+      WEBPASSWORD_FILE: pihole_web_password
+
+      # Docker bridge traffic does not look local from inside the container,
+      # so Pi-hole must accept queries arriving through the published port.
+      # Exposure is constrained by the host-IP-specific publish below.
+      FTLCONF_dns_listeningMode: "ALL"
+      FTLCONF_dns_upstreams: "1.1.1.1;1.0.0.1"
+      FTLCONF_dns_queryLogging: "true"
+      FTLCONF_database_maxDBdays: "30"
+
+      # Same public names everywhere; LAN clients use the local HTTPS edge.
+      # Do not add administration hosts here without a separate access review.
+      FTLCONF_dns_hosts: |-
+        192.0.2.10 home.example.com
+        192.0.2.10 next.home.example.com
+        192.0.2.10 images.home.example.com
+        192.0.2.10 media.home.example.com
+        192.0.2.10 assistant.home.example.com
+
+    ports:
+      # LAN DNS only. NetBird already owns 100.64.0.10:53 and is unaffected.
+      - "192.0.2.10:53:53/tcp"
+      - "192.0.2.10:53:53/udp"
+      # The dashboard is administrative and remains NetBird-only.
+      - "100.64.0.10:8053:80/tcp"
+
+    volumes:
+      - /srv/homelab/appdata/pihole:/etc/pihole
+
+    secrets:
+      - pihole_web_password
+
+    cap_add:
+      - SYS_NICE
+
+    healthcheck:
+      test: ["CMD-SHELL", "dig +short @127.0.0.1 pi.hole | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  pihole_web_password:
+    file: /etc/homelab/pihole-web-password

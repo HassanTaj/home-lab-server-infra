@@ -1,0 +1,25 @@
+[Unit]
+Description=Homelab additional swap (/srv/homelab/swapfile)
+Documentation=file:///srv/homelab-demo/guides/architecture.mdx
+# Extra swap on top of the 3.7G /dev/sda2 partition. Added an earlier deployment as a
+# stopgap while the host runs on a limited host memory.
+#
+# READ THIS BEFORE RELYING ON IT: swap does NOT prevent the container OOM kills
+# seen on this host. Those are cgroup limits -- homelab-nextcloud hit its own
+# memory.max of 2G -- and each container already has its own memory.swap.max.
+# Host swap cannot raise a container's ceiling. The real fixes were capping
+# Apache workers (runtime/compose/nextcloud/apache-mpm.conf) and, properly,
+# filling the empty RAM slot.
+#
+# The swapfile lives on /home (ext4, /dev/sda4) because / has less room and the
+# file must not sit on the USB disk, which is removable.
+After=home.mount
+RequiresMountsFor=/home
+
+[Swap]
+What=/srv/homelab/swapfile
+# Lower priority than the partition, so the partition is used first.
+Priority=-3
+
+[Install]
+WantedBy=swap.target

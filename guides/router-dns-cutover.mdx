@@ -1,0 +1,32 @@
+---
+title: "Router DNS cutover"
+description: "Stage a DHCP DNS change and keep a quick rollback path."
+---
+
+Only advertise Pi-hole through router DHCP after direct DNS and HTTPS checks pass
+from more than one client. This procedure is generic; substitute your own router
+addresses and service names.
+
+## Before changing DHCP
+
+- Confirm the main router is the only DHCP server.
+- Reserve an address for the homelab and verify Pi-hole answers on that address.
+- Verify every local HTTPS route and its certificate.
+- Record the current DHCP DNS settings and make sure you can reach the router
+  over a wired connection.
+
+## Apply and verify
+
+Set the router's DHCP DNS server to the homelab address. Renew one test client's
+lease, verify it received the intended DNS server, and query each local service
+name. Confirm ordinary internet names still resolve through Pi-hole's upstream
+resolver. Check a second client before leaving the new setting in place.
+
+The `192.0.2.0/24` addresses in this repository are reserved documentation
+examples. Replace them before using any command or configuration.
+
+## Roll back
+
+Restore the DNS setting recorded before the change, renew the test client's
+lease, and confirm it can resolve both internal and internet names again. Keep
+the Pi-hole dashboard reachable only from the private administration network.

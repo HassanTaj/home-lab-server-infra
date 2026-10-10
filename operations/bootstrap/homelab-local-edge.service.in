@@ -1,0 +1,15 @@
+[Unit]
+Description=Homelab LAN HTTPS edge
+Requires=docker.service
+Wants=network-online.target netbird.service homelab-local-edge-certsync.service
+After=docker.service network-online.target netbird.service homelab-local-edge-certsync.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@REPO_ROOT@
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/local-edge/docker-compose.yml up -d --wait
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/local-edge/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

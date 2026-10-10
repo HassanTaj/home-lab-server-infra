@@ -1,0 +1,25 @@
+name: homelab-yui
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.9.4@sha256:3e6710a7ab2a61311d9d899b719f6c3657791c63e8f4942cec4ebc42401d6b76
+    container_name: homelab-yui
+    hostname: yui
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Asia/Karachi
+    volumes:
+      - /srv/homelab/appdata/yui:/config
+      - ./configuration.yaml:/config/configuration.yaml:ro
+      - /etc/localtime:/etc/localtime:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    stop_grace_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

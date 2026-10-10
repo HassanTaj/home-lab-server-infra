@@ -1,0 +1,509 @@
+---
+title: "Something's wrong"
+description: "Find your symptom, run the fix. Plain instructions for when the homelab misbehaves, with what you should expect to see."
+---
+
+Find what's happening to you, do the thing. Every command starts from the repo
+folder:
+
+```sh
+cd /srv/homelab-demo
+```
+
+If a word here is unfamiliar, [the glossary](glossary) explains it in plain
+language.
+
+<Note>
+**First, the one command worth memorising.** It checks everything and tells you
+what's wrong:
+
+```sh
+sudo ./operations/tests/run-all.sh --host
+```
+
+You want to see `SUITE PASSED` at the bottom. If you don't, the failing line
+tells you where to look.
+</Note>
+
+---
+
+## Post-reboot or post-upgrade check
+
+Run this before troubleshooting an application. A oneshot systemd unit may show
+`active (exited)` while its Docker containers remain healthy and running.
+
+```sh
+sudo systemctl --failed
+sudo docker ps
+sudo ./operations/storage/verify-disk.sh
+sudo ./operations/storage/verify-pool.sh
+sudo ./operations/tests/run-all.sh --host
+```
+
+Expected application containers are `homelab-nextcloud`, `homelab-jellyfin`,
+`homelab-immich`, `homelab-pihole`, `homelab-local-edge`, and their supporting
+databases/Redis. Timer-triggered jobs such as backup and restore services are
+ormally inactive between scheduled runs; inspect their `.timer` units instead.
+
+---
+
+## Files I copied in don't show up in Nextcloud
+
+**What's happening:** Nextcloud runs as a user called `www-data`. When you copy
+files in as yourself or as root, the files belong to *you* — and Nextcloud isn't
+allowed to open them. It can see the folder's name but not what's inside.
+
+**The fix:**
+
+```sh
+sudo ./operations/storage/fix-share-permissions.sh
+```
+
+Or just one folder, if you know which:
+
+```sh
+sudo ./operations/storage/fix-share-permissions.sh "My Folder"
+```
+
+Then refresh Nextcloud in your browser. The folder appears.
+
+<Warning>
+You'll see two errors mentioning `.homelab` and "Permission denied". **That is
+correct.** Those are your backups, deliberately locked so Nextcloud can't read
+or delete them. Don't try to fix it.
+</Warning>
+
+<Accordion title="Why no copy command gets this right on its own">
+All three of these were measured on this machine:
+
+| What you type | Who ends up owning it | Shows up? |
+|---|---|---|
+| `mv` (moving within the same disk) | you | **no** |
+| `cp -a` or `rsync -a` | you | **no** |
+| plain `cp -r` | shared | yes, but read-only |
+
+`mv` is the worst one and the most natural thing to type. Moving a file within
+one disk doesn't really copy anything — it just changes where the label points —
+so the ownership comes along unchanged.
+
+Rather than remember which flag to use, just run the script afterwards. It's
+safe to run as many times as you like.
+</Accordion>
+
+---
+
+## The drive is mounted, but my old shortcut is empty
+
+**What's happening:** the data disk used to be mounted at `/mnt/homelab-usb`.
+It is now mounted at `/mnt/data`, because the disk lives in the laptop's
+internal SATA bay. A shortcut created before that rename can still point at the
+retired path and look like the drive has disappeared.
+
+**Current paths:**
+
+| What you want | Open this |
+|---|---|
+| Data disk (example drive) | `/mnt/data` or `~/USB-Drive` |
+| Internal SSD shared folder | `/srv/homelab/shared-internal` or `~/Shared-Internal` |
+
+The `~/USB-Drive` shortcut was repaired on YYYY-MM-DD to target `/mnt/data`.
+If it ever becomes stale again, repair only the shortcut — do not unmount the
+disk or run `udisksctl mount`, because systemd owns this mount and the services
+depend on its stable path:
+
+```sh
+ln -sfn /mnt/data ~/USB-Drive
+```
+
+The data disk is intentionally readable by the `www-data` group and not by
+every local account. The top-level `.homelab` directory is private by design;
+the ordinary folders should be visible to the `admin` account. Do not loosen
+the mount to `777` just to expose the backup directory.
+
+If `/mnt/data` itself is missing, use the disk checks in the next section rather
+than creating files underneath the empty mountpoint.
+
+---
+
+## Nextcloud and Jellyfin are down, but everything else is fine
+
+**Check first:**
+
+```sh
+lsblk
+```
+
+Look for a `sdb` line about 1 TB. **No `sdb` means the data disk isn't plugged in
+or isn't being seen.**
+
+**The fix:** plug the data disk back in. Then wait two minutes — a watchdog checks
+every two minutes and starts things again on its own. You don't need to type
+anything.
+
+<Info>
+**This is on purpose, not a bug.** Both of those services keep files on the data disk
+disk. If they started without it, they'd look at an empty folder, decide every
+one of your files had been deleted, and then tell your phone and laptop to delete
+their copies too. Refusing to start is them protecting you.
+</Info>
+
+If the disk is plugged in but still not showing up, see the next section.
+
+---
+
+## The data disk won't mount after being unplugged suddenly
+
+**What's happening:** the disk was yanked out (or the cable wobbled) while it was
+mid-write. Windows-formatted disks leave a "check me" flag set when that happens,
+and Linux refuses to touch it until the flag is cleared.
+
+**How to confirm:**
+
+```sh
+sudo ntfsinfo -m /dev/sdb1
+```
+
+If it says `$MFTMirr does not match $MFT`, that's this problem. **Your files are
+fine** — only the disk's index-of-the-index is confused.
+
+**The fix, in order. Don't skip step 5.**
+
+<Steps>
+<Step title="Stop the watchdog getting in your way">
+```sh
+sudo touch /etc/homelab/stack-hold
+```
+It restarts things every two minutes. This pauses it while you work.
+</Step>
+
+<Step title="Look at the disk without changing it">
+```sh
+sudo mkdir -p /mnt/data-check
+sudo mount -t ntfs3 -o ro /dev/sdb1 /mnt/data-check
+ls /mnt/data-check
+```
+`-o ro` means read-only — nothing can be written, so this can't make things
+worse. If you can see your folders, the data is intact.
+
+<Warning>
+Use `/mnt/data-check`, **not** `/mnt/data`. Touching the real path wakes
+the whole system up on a disk you haven't checked yet.
+</Warning>
+</Step>
+
+<Step title="Copy your backups off first">
+```sh
+sudo rsync -a /mnt/data-check/.homelab/backups/internal/ \
+             /srv/homelab/backups/repo-copy/
+sudo umount /mnt/data-check
+```
+Small and quick. Do it anyway — repairing before you have a copy is the one way
+this goes badly.
+</Step>
+
+<Step title="Repair the disk">
+```sh
+sudo ntfsfix /dev/sdb1
+```
+Expect it to say it corrected one record.
+</Step>
+
+<Step title="Clear the flag — this is the step people miss">
+```sh
+sudo ntfsfix -d /dev/sdb1
+```
+The previous command *sets* a "needs checking in Windows" flag when it finishes.
+Without `-d` the disk still refuses to mount and it looks like the repair failed.
+</Step>
+
+<Step title="Bring everything back">
+```sh
+sudo systemctl start 'mnt-data.mount'
+sudo rm /etc/homelab/stack-hold
+```
+The watchdog starts Nextcloud and Jellyfin again within two minutes.
+</Step>
+</Steps>
+
+The full write-up of the time this actually happened is in
+[the project history](runbook).
+
+---
+
+## The data disk is dead or gone for good
+
+Nextcloud normally refuses to start without it — but nearly all of your Nextcloud
+data is on the internal drive. This runs it anyway, with just the data-disk shares
+switched off:
+
+```sh
+sudo ./operations/storage/nextcloud-degraded.sh --on
+```
+
+Everything on the internal drive works normally. The two data disk folders show
+"Storage not available".
+
+When a disk is back:
+
+```sh
+sudo ./operations/storage/nextcloud-degraded.sh --off
+```
+
+<Info>
+Why "Storage not available" instead of just showing them empty? Because an empty
+folder looks exactly like "the owner deleted many files" — and Nextcloud would
+pass that news on to every phone and laptop syncing with it. "Unavailable" is a
+message; "empty" is an instruction to delete.
+</Info>
+
+---
+
+## Something is down and I don't know what
+
+```sh
+systemctl is-active homelab-{databases,nextcloud,management,media,immich,networking,landing,local-edge}.service
+```
+
+Four answers, one per service. Anything other than `active` is your problem.
+
+Then ask the watchdog what it's been seeing:
+
+```sh
+journalctl -u homelab-stack-watchdog.service -n 30
+```
+
+- `nothing to do` — everything's running
+- `waiting for the disk` — the data disk is unplugged
+- `failed to start` — read the lines above it for the reason
+
+To pause the watchdog while you work, and resume after:
+
+```sh
+sudo touch /etc/homelab/stack-hold
+sudo rm    /etc/homelab/stack-hold
+```
+
+<Warning>
+If you stop a service without setting `stack-hold` first, the watchdog will
+politely start it again about two minutes later, and you'll think you're going
+mad.
+</Warning>
+
+---
+
+## Are my backups actually OK?
+
+```sh
+sudo ./operations/backups/status.sh
+```
+
+Read-only, safe any time. It tells you when the last backup succeeded, how much
+room is left, and whether the disk is healthy.
+
+To run one right now — worth doing before anything risky:
+
+```sh
+sudo systemctl start homelab-backup-internal.service
+```
+
+To prove a backup can actually give data back:
+
+```sh
+sudo ./operations/restore/drill.sh
+```
+
+<Tip>
+A backup you have never restored is a guess. This runs automatically once a
+month, and it restores into a scratch area, so it can't touch anything real.
+</Tip>
+
+<Warning>
+**Not everything is backed up.** `shared-internal` and the data disk's own folders
+are not. Anything that exists *only* in those places has no backup at all.
+</Warning>
+
+---
+
+## `docker ps` is empty but the images are still there
+
+**Nothing is lost.** All your data is in ordinary folders under `/srv/homelab/`,
+never inside Docker. An empty container list just means nothing is running.
+
+```sh
+systemctl is-active homelab-{databases,nextcloud,management,media,immich,networking,landing,local-edge}.service
+journalctl -u homelab-stack-watchdog.service -n 30
+```
+
+If only Nextcloud and Jellyfin are down, the data disk is unplugged — see above.
+
+<Info>
+`docker volume ls` is empty **always**, and that's correct. This setup keeps
+everything in normal folders on purpose, so you can open, copy and back them up
+like any other file.
+</Info>
+
+---
+
+## A website is slow, or Nextcloud throws errors
+
+Usually too many people at once, or the database running out of connection slots.
+
+```sh
+docker exec homelab-postgres psql -U homelab_admin -d postgres \
+  -c "select count(*) from pg_stat_activity"
+```
+
+Under about 90 is fine. At 100 you've hit the ceiling and things start failing.
+
+<Accordion title="The three numbers that must stay in balance">
+These are really one setting, not three:
+
+```
+Apache workers   <  database connections − room for backups
+memory needed    <  the container's memory limit
+```
+
+Right now: 48 workers, 100 connections, 2 GB limit. Roughly 13 MB of memory per
+worker.
+
+Raising any one of them alone is what once caused both the container to be killed
+for using too much memory *and* the database to refuse new connections. If you
+need more capacity, raise them together — or better, reduce demand. The reasoning
+is in [How it works](architecture).
+</Accordion>
+
+---
+
+## I want to add a new service that needs a database
+
+PostgreSQL is already shared, and backups pick up new databases automatically —
+no changes needed there.
+
+<Steps>
+<Step title="Give it its own database and login">
+Add a block to `operations/bootstrap/40-database-roles.sh`, copying the Nextcloud
+one. Never reuse another app's login.
+</Step>
+<Step title="Put its password in the right place">
+`/etc/homelab/<app>.env`, owned by root, mode `0600`. Scripts refuse to read it
+otherwise — on purpose.
+</Step>
+<Step title="Point the app at the shared database">
+Host `homelab-postgres`, on the `homelab-db` network.
+</Step>
+</Steps>
+
+<Warning>
+**Immich is the exception.** It needs database features this PostgreSQL doesn't
+have, and it's fussy about versions. Give Immich its own database container, or
+you'll tie Nextcloud's upgrade schedule to Immich's forever.
+</Warning>
+
+---
+
+## Planned jobs, not problems
+
+Shutting down, rebooting, moving a disk, adding memory, monthly upkeep — those
+live in [Shutdown, reboot & hardware](maintenance).
+
+---
+
+## I moved or renamed the repo folder
+
+The service files contain the full path, so they all break at once.
+
+```sh
+sudo touch /etc/homelab/stack-hold
+sudo ./operations/bootstrap/50-systemd.sh
+sudo systemctl restart homelab-databases homelab-nextcloud homelab-management homelab-media
+sudo rm /etc/homelab/stack-hold
+sudo ./operations/tests/run-all.sh --host
+```
+
+The second command rewrites every service file with the new path. That's the
+whole fix.
+
+---
+
+## Monthly, if you want to stay ahead of trouble
+
+```sh
+sudo ./operations/backups/check-repos.sh     # is the backup file healthy?
+sudo ./operations/restore/drill.sh           # can it actually restore?
+sudo ./operations/tests/run-all.sh --host    # is everything still safe?
+```
+
+Fifteen minutes, once a month. It's the difference between having backups and
+believing you have backups.
+
+---
+
+## Still stuck?
+
+<CardGroup cols={2}>
+<Card title="Every script explained" icon="terminal" href="scripts">
+What each one does, when to run it, and what it refuses to do.
+</Card>
+<Card title="Shutdown, reboot & hardware" icon="power-off" href="maintenance">
+Planned jobs: powering off safely, post-reboot checks, moving a disk, adding RAM.
+</Card>
+<Card title="Why it's built this way" icon="sitemap" href="architecture">
+The design, and the reasoning behind the parts that look odd.
+</Card>
+<Card title="Words you'll see" icon="book" href="glossary">
+Every technical term, in plain language.
+</Card>
+<Card title="What went wrong before" icon="clock-rotate-left" href="runbook">
+Real incidents, causes, and fixes.
+</Card>
+</CardGroup>
+
+## Storage pool and media organization
+
+### Verify the pool before using Nextcloud
+
+```sh
+sudo /srv/homelab-demo/operations/storage/verify-pool.sh
+findmnt /mnt/storage
+```
+
+The pool is only for bulk/replaceable data. Use the direct SSD paths for
+Immich originals and Shared Internal, and the direct /mnt/data path for the
+existing archive and Jellyfin source.
+
+### Nextcloud Storage Pool
+
+After the pool is mounted, add a Local External Storage entry named
+Storage Pool with path /mnt/storage/nextcloud. Keep the existing entries
+Shared Internal (/mnt/internal-shared) and Data (/mnt/data) unchanged.
+Test an upload, Linux visibility, rename, download, and a scan before granting
+the entry to additional groups.
+
+### Jellyfin tutorial separation
+
+Create /etc/homelab/jellyfin-api-key as root:root mode 0600, then run:
+
+```sh
+sudo /srv/homelab-demo/operations/media/sync-jellyfin-tutorial-libraries.sh
+sudo /srv/homelab-demo/operations/media/sync-jellyfin-tutorial-libraries.sh --apply
+```
+
+The first command is a dry-run. The second creates missing subject libraries
+with the musicvideos type and requests one global refresh. Existing libraries
+with a different path stop safely; no library is deleted.
+
+### Example Album external library and album
+
+Create /etc/homelab/immich-album-sync.env from the example template with the
+Immich API key and the external-library ID. In the Immich admin UI add a
+read-only external library named Example Album at
+/mnt/shared-internal/Example Album, click Scan, then run:
+
+```sh
+sudo /srv/homelab-demo/operations/media/sync-immich-folder-album.sh
+sudo /srv/homelab-demo/operations/media/sync-immich-folder-album.sh --apply
+```
+
+The helper adds missing assets and removes stale album memberships only; it
+never deletes or moves source files. Folder View remains available as a
+secondary filesystem-style view.

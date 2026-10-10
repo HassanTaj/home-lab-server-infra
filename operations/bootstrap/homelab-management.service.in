@@ -1,0 +1,23 @@
+[Unit]
+Description=Homelab management (Portainer)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# No data-disk dependency and no dependency on the databases: Portainer is the
+# administrative surface and must stay reachable precisely when something else
+# in the stack is broken.
+After=docker.service netbird.service
+Requires=docker.service
+Wants=netbird.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=300
+WorkingDirectory=@REPO_ROOT@
+
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/management/docker-compose.yml up -d --wait
+
+# `stop`, not `down` -- see the note in homelab-databases.service.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/management/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

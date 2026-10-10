@@ -1,0 +1,11 @@
+[Unit]
+Description=Monthly Homelab restore drill
+
+[Timer]
+OnCalendar=*-*-01 06:30:00
+RandomizedDelaySec=1h
+Persistent=yes
+Unit=homelab-restore-drill.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Home Lab Server Demo",
+  "description": "Sanitized self-hosted infrastructure stacks, operations, and operator guides.",
+  "colors": {
+    "primary": "#0B6E4F",
+    "light": "#3FBF8F",
+    "dark": "#07452F"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Start here",
+            "pages": [
+              "guides/index",
+              "guides/setup",
+              "guides/architecture",
+              "guides/diagrams",
+              "guides/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "Run and maintain",
+            "pages": [
+              "guides/runbook",
+              "guides/maintenance",
+              "guides/desktop",
+              "guides/scripts"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Networking",
+        "groups": [
+          {
+            "group": "DNS and edge",
+            "pages": [
+              "guides/pihole-config",
+              "guides/local-edge",
+              "guides/tplink-config",
+              "guides/router-dns-cutover"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "redirects": [
+    {
+      "source": "/README",
+      "destination": "/"
+    }
+  ]
+}

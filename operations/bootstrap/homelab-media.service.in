@@ -1,0 +1,32 @@
+[Unit]
+Description=Homelab media (Jellyfin)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# Gated on the data disk, exactly like homelab-nextcloud.service and for the same
+# reason: the entire media library lives at /mnt/data. If the disk is
+# absent the bind mount would resolve to an empty directory on the SSD, Jellyfin
+# would find zero files and its library-scan task would strip 43,481 items out of
+# its own database. Recovering that means a full rescan of a large library on a 5400 RPM
+# spindle, and any watch history tied to those item ids is lost.
+#
+# Fail closed instead, and let homelab-stack-watchdog.timer start it again within
+# two minutes of the disk returning.
+After=docker.service netbird.service mnt-data.mount
+Requires=docker.service
+Wants=netbird.service
+RequiresMountsFor=/mnt/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=600
+WorkingDirectory=@REPO_ROOT@
+
+ExecStartPre=@REPO_ROOT@/operations/storage/verify-disk.sh
+
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/media/docker-compose.yml up -d --wait
+
+# `stop`, not `down` -- see the note in homelab-databases.service.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/media/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

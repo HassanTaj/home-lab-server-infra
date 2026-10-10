@@ -1,0 +1,153 @@
+name: homelab-nextcloud
+
+# Nextcloud Apache, its dedicated cron container, and a Nextcloud-private Redis
+# used for transactional file locking.
+#
+# The web and cron containers MUST always run the identical image digest.
+# Redis publishes no host port and lives on a project-internal network.
+
+networks:
+  homelab-db:
+    external: true
+  nextcloud-internal:
+    driver: bridge
+    internal: true
+
+x-nextcloud-image: &nextcloud_image
+  # Nextcloud 34.0.2-apache. Digest resolved YYYY-MM-DD for linux/amd64.
+  image: nextcloud:34.0.2-apache@sha256:32466d0c4e549c51b7d5175fe96485bd1b7287d81e898fc70d39b4f460ea50f2
+
+x-nextcloud-volumes: &nextcloud_volumes
+  - /srv/homelab/appdata/nextcloud/html:/var/www/html
+  - /srv/homelab/nextcloud-data:/var/www/html/data
+  # Group-restricted shares attached through the Local External Storage backend.
+  # verify-disk.sh must pass before this project starts, so the data-disk path can never
+  # resolve to an empty mountpoint.
+  - /srv/homelab/shared-internal:/mnt/internal-shared
+  # The WHOLE data disk, read-write by deployment configuration so files can be
+  # managed from Nextcloud directly.
+  #
+  # NOTE: this disk is NOT backed up (the data-shared backup job was removed at
+  # the same time), so anything deleted here is gone permanently. homelab/backups
+  # is root-owned 0700, so the Restic repository holding the INTERNAL backups
+  # stays unreadable and undeletable from Nextcloud even though it sits under
+  # this path — that protection is deliberate and should not be relaxed.
+  - /mnt/data:/mnt/data
+  # Mergerfs bulk pool. Configure it in Nextcloud as /Storage Pool.
+  - /mnt/storage/nextcloud:/mnt/storage/nextcloud
+
+services:
+  nextcloud:
+    <<: *nextcloud_image
+    container_name: homelab-nextcloud
+    restart: unless-stopped
+    env_file:
+      - /etc/homelab/nextcloud.env
+    environment:
+      POSTGRES_HOST: homelab-postgres
+      REDIS_HOST: homelab-nextcloud-redis
+      # edge VPS Traefik is the only TLS edge; Nextcloud must generate https URLs.
+      OVERWRITEPROTOCOL: https
+      OVERWRITEHOST: next.home.example.com
+      OVERWRITECLIURL: https://next.home.example.com
+      NEXTCLOUD_TRUSTED_DOMAINS: next.home.example.com
+      PHP_MEMORY_LIMIT: 768M
+      PHP_UPLOAD_LIMIT: 16G
+    ports:
+      # NetBird address only. Never 0.0.0.0.
+      - "100.64.0.10:8080:80"
+    volumes:
+      - /srv/homelab/appdata/nextcloud/html:/var/www/html
+      - /srv/homelab/nextcloud-data:/var/www/html/data
+      # Two independent shares on DIFFERENT physical disks, attached as separate
+      # Nextcloud external storages so each can be granted to a different group.
+      - /srv/homelab/shared-internal:/mnt/internal-shared
+      - /mnt/data:/mnt/data
+      - /mnt/storage/nextcloud:/mnt/storage/nextcloud
+      # Restores the real client IP behind edge VPS Traefik. Without it
+      # brute-force protection sees only the proxy address.
+      - ./apache-remoteip.conf:/etc/apache2/conf-enabled/zz-homelab-remoteip.conf:ro
+      # Caps worker count so Apache cannot exceed the container memory limit
+      # or PostgreSQL's max_connections. See the file header.
+      - ./apache-mpm.conf:/etc/apache2/conf-enabled/zz-homelab-mpm.conf:ro
+    networks:
+      - homelab-db
+      - nextcloud-internal
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'exit(0);' && curl -fsS http://localhost/status.php >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2048m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cron:
+    # Identical digest to the web container by construction.
+    <<: *nextcloud_image
+    container_name: homelab-nextcloud-cron
+    restart: unless-stopped
+    entrypoint: /cron.sh
+    env_file:
+      - /etc/homelab/nextcloud.env
+    environment:
+      POSTGRES_HOST: homelab-postgres
+      REDIS_HOST: homelab-nextcloud-redis
+    volumes: *nextcloud_volumes
+    networks:
+      - homelab-db
+      - nextcloud-internal
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    # Redis 8.10.0-alpine. Digest resolved YYYY-MM-DD for linux/amd64.
+    image: redis:8.10.0-alpine@sha256:a6a88248ad5b0c724b7f2b380b7d21f46097db158b2b077ef85bcb97f90aee3a
+    container_name: homelab-nextcloud-redis
+    restart: unless-stopped
+    env_file:
+      - /etc/homelab/redis.env
+    command: >-
+      sh -c 'exec redis-server
+      --requirepass "$$REDIS_PASSWORD"
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru'
+    networks:
+      - nextcloud-internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

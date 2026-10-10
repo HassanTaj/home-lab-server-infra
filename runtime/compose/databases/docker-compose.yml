@@ -1,0 +1,60 @@
+name: homelab-databases
+
+# Shared PostgreSQL 18.
+#
+# Application traffic reaches PostgreSQL over the shared external `homelab-db`
+# network created by operations/bootstrap/20-networks.sh — not over a host port.
+#
+# NO pgADMIN HERE, by decisifor this demo. It was the single largest consumer on
+# this low-memory host (resource-intensive) for a tool opened perhaps monthly, and edge VPS
+# already runs one. Instead PostgreSQL is published on LOOPBACK ONLY, so any
+# admin machine can reach it through an SSH tunnel and point pgAdmin, DBeaver or
+# psql at it:
+#
+#     ssh -N -L 5432:127.0.0.1:5432 root@100.64.0.10
+#     psql -h 127.0.0.1 -U nextcloud nextcloud
+#
+# 127.0.0.1 deliberately, not the NetBird address: a database port on the overlay
+# would be reachable by every peer, and the plan rules that out. A tunnel needs
+# an SSH credential first, so nothing is exposed to the network at all.
+
+networks:
+  homelab-db:
+    external: true
+
+services:
+  postgres:
+    # PostgreSQL 18.4 (bookworm). Digest resolved YYYY-MM-DD for linux/amd64.
+    image: postgres:18.4-bookworm@sha256:7e6103cf85f88f7a0eddb3ec0b1ba8940eba098ed118ade25a729ca9daee5568
+    container_name: homelab-postgres
+    restart: unless-stopped
+    env_file:
+      - /etc/homelab/databases.env
+    environment:
+      # PostgreSQL 18 images keep the cluster under /var/lib/postgresql/<major>/docker.
+      # The bind mount is therefore /var/lib/postgresql, NOT /var/lib/postgresql/data.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      # Loopback only. Reachable exclusively through an SSH tunnel.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - /srv/homelab/appdata/postgres:/var/lib/postgresql
+    networks:
+      - homelab-db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

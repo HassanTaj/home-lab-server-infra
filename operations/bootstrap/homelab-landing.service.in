@@ -1,0 +1,24 @@
+[Unit]
+Description=Homelab public landing page
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# Deliberately has NO dependency on the data disk and none on the databases. It is
+# the front door: it should be the last thing to go down and the first thing back,
+# because it is what someone loads when they are trying to work out whether
+# anything else is working.
+After=docker.service netbird.service
+Requires=docker.service
+Wants=netbird.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=300
+WorkingDirectory=@REPO_ROOT@
+
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/landing/docker-compose.yml up -d --wait
+
+# `stop`, not `down` -- see the note in homelab-databases.service.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/landing/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

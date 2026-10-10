@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Homelab internal-to-USB backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=yes
+Unit=homelab-backup-internal.service
+
+[Install]
+WantedBy=timers.target

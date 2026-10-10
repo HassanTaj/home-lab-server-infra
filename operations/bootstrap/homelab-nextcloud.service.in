@@ -1,0 +1,36 @@
+[Unit]
+Description=Homelab Nextcloud (web, cron, Redis)
+Documentation=file://@REPO_ROOT@/guides/architecture.md
+# This is the ONLY unit tied to the data disk, because it is the only project
+# that binds a path inside it (/mnt/data -> /mnt/data).
+#
+# RequiresMountsFor is kept deliberately: systemd expands it to a hard
+# Requires= on the mount unit, so if the disk disappears Nextcloud is stopped
+# rather than left writing into an empty directory on the SSD. That fail-closed
+# behaviour is the point. What changed after YYYY-MM-DD is the blast radius --
+# a data disk drop now stops Nextcloud alone, and homelab-stack-watchdog.timer brings
+# it back automatically once the disk returns.
+After=docker.service netbird.service mnt-data.mount mnt-storage.mount homelab-databases.service
+Requires=docker.service homelab-databases.service mnt-storage.mount
+Wants=netbird.service
+RequiresMountsFor=/mnt/data /mnt/storage
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=900
+WorkingDirectory=@REPO_ROOT@
+
+# Fail closed: refuse to start if the data disk is not genuinely mounted.
+# Without this the Nextcloud bind mount would silently point at an empty
+# directory on the SSD.
+ExecStartPre=@REPO_ROOT@/operations/storage/verify-disk.sh
+ExecStartPre=@REPO_ROOT@/operations/storage/verify-pool.sh
+
+ExecStart=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/nextcloud/docker-compose.yml up -d --wait
+
+# `stop`, not `down` -- see the note in homelab-databases.service.
+ExecStop=/usr/bin/docker compose -f @REPO_ROOT@/runtime/compose/nextcloud/docker-compose.yml stop
+
+[Install]
+WantedBy=multi-user.target

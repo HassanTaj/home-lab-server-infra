@@ -1,0 +1,82 @@
+name: homelab-media
+
+# Jellyfin. Video library server for the ~large media libraries
+# of other video on the data disk (43,481 video files, measured an earlier deployment).
+#
+# WHY JELLYFIN AND NOT EMBY: Emby gates hardware transcoding behind a Premiere
+# licence (paid). This host is an low-power CPU whose entire value for video
+# is Intel QuickSync, so paying to unlock the one feature that makes the machine
+# viable is a poor trade. Jellyfin ships VAAPI/QSV transcoding free.
+#
+# WHY NOT SERVE VIDEO FROM NEXTCLOUD: Nextcloud has no transcoding, no resume
+# tracking and no library UI. It is a file sync tool that happens to preview
+# video. Keeping the files where they are and pointing Jellyfin at them
+# read-only costs no extra disk.
+
+services:
+  jellyfin:
+    # Pinned version plus digest, per the repo rule: no `latest` tags.
+    image: jellyfin/jellyfin:10.11.9@sha256:bc9fa8e1462fffe3d8d4255fc62af478602641f4c0e5f4875fea8563d1189837
+    container_name: homelab-jellyfin
+    restart: unless-stopped
+
+    # QuickSync. /dev/dri/renderD128 is root:render 0660, so the container needs
+    # the render group rather than privileged access or a device cgroup rule.
+    # Without this Jellyfin silently falls back to software transcoding, which on
+    # 2 physical cores means one 1080p stream saturates the CPU.
+    group_add:
+      - "991"          # render, verified on the host an earlier deployment
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+
+    environment:
+      # Jellyfin writes its transcode scratch here. It MUST stay on the SSD.
+      # The reason changed on an earlier deployment but the conclusion did not: the disk
+      # left its external enclosure (480 Mbps, measured) for an internal SATA
+      # caddy (measured 64 MB/s), so the bus is no longer the ceiling -- the
+      # 5400 RPM spindle is. Transcode segments are small synchronous writes,
+      # the worst case for seek latency, and interleaving them with library
+      # reads on the same spindle still stalls playback.
+      JELLYFIN_CACHE_DIR: /cache
+      TZ: Asia/Karachi
+
+    ports:
+      # NetBird address only. Never 0.0.0.0 - the homelab has no public
+      # listener; edge VPS Traefik is the only edge. Same rule as Nextcloud.
+      - "100.64.0.10:8096:8096"
+
+    volumes:
+      # Config and cache on the internal SSD, never the removable disk.
+      - /srv/homelab/appdata/jellyfin/config:/config
+      - /srv/homelab/appdata/jellyfin/cache:/cache
+
+      # MEDIA IS READ-ONLY, deliberately and permanently.
+      #
+      # The data disk is not backed up (the data-shared backup job was removed by
+      # decisifor this demo), so anything deleted there is gone for good. A media
+      # server never needs write access to its library: it only reads files and
+      # keeps its own metadata in /config. Mounting :ro means no Jellyfin bug,
+      # no misconfigured library-cleanup task and no compromised session can
+      # delete a large media library of irreplaceable video.
+      - /mnt/data:/media:ro
+
+    deploy:
+      resources:
+        limits:
+          # Jellyfin idles near 250 MB; the headroom is for transcode buffers.
+          # Kept modest because this host has limited memory and PostgreSQL and
+          # Nextcloud already reserve 1536m and 2048m.
+          memory: 1024m
+
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,181 @@
+name: homelab-immich
+
+# Immich v3.1.0 — photo library with search by image content and face grouping.
+#
+# WHY ITS OWN POSTGRESQL, AND NOT THE SHARED ONE
+# Immich needs the VectorChord and pgvector extensions. The shared instance has
+# neither -- verified: `pg_available_extensions` returns nothing for vector,
+# vectors or vchord. It also pins PostgreSQL **14** while the shared instance runs
+# 18. Sharing would couple Nextcloud's upgrade schedule to Immich's in both
+# directions, and Immich's own docs advise against a pre-existing server.
+#
+# WHY THIS UNIT IS NOT GATED ON THE DATA DISK
+# Immich's own managed library lives on the internal SSD, so the service stays
+# fully usable when the data disk is gone. It reads the data disk only for
+# EXTERNAL libraries, and Immich handles absence correctly there: a missing
+# external file is marked **offline**, not deleted. That is the opposite of
+# Nextcloud and Jellyfin, both of which purge their index when a scan sees an
+# empty directory, and it is why those two are gated and this one is not.
+#
+# THE WHOLE DISK IS BOUND, NOT ONE SUBFOLDER -- deliberately.
+# Docker CREATES a missing bind source as an empty directory. Binding
+# "/mnt/data/media-library" directly would, on any start with the disk
+# absent, leave a stray directory inside the mountpoint -- which then trips
+# verify_data_mountpoint_clean ("unmounted but not empty") and can block the real
+# mount from ever coming back. /mnt/data always exists, so binding it can create
+# nothing. Immich indexes only the import paths configured per library, so this
+# grants read access without indexing anything unasked. Same pattern as Jellyfin.
+#
+# ACCESS: NetBird, plus a Traefik router for images.home.example.com added
+# an earlier deployment at owner request (rate-limited on /api/auth/login). Photos are more
+# sensitive than course videos and Immich has no per-album access control
+# comparable to Nextcloud's group shares, so prefer Immich's own share links for
+# anything that must reach outsiders.
+
+networks:
+  # db, redis and ML sit ONLY here. internal:true means no route in or out, so
+  # they cannot be reached from the LAN or the overlay even by accident.
+  immich-internal:
+    driver: bridge
+    internal: true
+  # The server needs a second, NON-internal network. Docker cannot publish a port
+  # from a container attached only to an internal network -- the publish is
+  # accepted and then silently does nothing, which is exactly what happened here:
+  # the container was healthy, Immich was listening on 2283 inside, and
+  # `docker inspect` showed "2283/tcp->" with no host binding at all.
+  immich-edge:
+    driver: bridge
+
+services:
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:v3.1.0@sha256:b434cb9287eea1471c9974845914d4dd328c9c2d652e446ed4930f99944f0ceb
+    container_name: homelab-immich
+    restart: unless-stopped
+    env_file:
+      - /etc/homelab/immich.env
+    environment:
+      DB_HOSTNAME: homelab-immich-postgres
+      REDIS_HOSTNAME: homelab-immich-redis
+      IMMICH_MACHINE_LEARNING_URL: http://homelab-immich-ml:3003
+      TZ: Asia/Karachi
+    ports:
+      # NetBird address only. Never 0.0.0.0 -- the homelab has no public listener.
+      - "100.64.0.10:2283:2283"
+    volumes:
+      # Managed originals are visible on the native SSD. Keep the old
+      # appdata/immich/library tree intact for the documented rollback window.
+      - /srv/homelab/immich-data:/data
+      # Generated data remains on SSD appdata and is mounted over the managed root.
+      - /srv/homelab/appdata/immich/generated/thumbs:/data/thumbs
+      - /srv/homelab/appdata/immich/generated/encoded-video:/data/encoded-video
+      - /srv/homelab/appdata/immich/generated/profile:/data/profile
+      - /srv/homelab/appdata/immich/generated/backups:/data/backups
+      - /etc/localtime:/etc/localtime:ro
+      # Example Album is configured as an Immich read-only external library path.
+      - /srv/homelab/shared-internal:/mnt/shared-internal:ro
+      - /mnt/data:/mnt/data:ro
+    networks:
+      - immich-edge
+      - immich-internal
+    depends_on:
+      immich-postgres:
+        condition: service_healthy
+      immich-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:2283/api/server/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          memory: 2048m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  immich-ml:
+    image: ghcr.io/immich-app/immich-machine-learning:v3.1.0@sha256:5a0839dc5303cd7215bcd2180a26aed3af41675aefb3e75e5157e9f10ad16e6e
+    container_name: homelab-immich-ml
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Karachi
+    volumes:
+      # Model cache. Several GB once the CLIP and face models download, which is
+      # why it is a named path on the SSD rather than an anonymous volume.
+      - /srv/homelab/appdata/immich/ml-cache:/cache
+    networks:
+      - immich-internal
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:3003/ping')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          # The heaviest component. Now affordable: the host has additional swap and memory
+          # usage is zero. This would not have fit before the memory upgrade.
+          memory: 3072m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  immich-redis:
+    image: docker.io/valkey/valkey:9@sha256:70739f85ad2ee01a726a965584a0f94895f01b0c60b3cc8b0aeef11eaa6888cf
+    container_name: homelab-immich-redis
+    restart: unless-stopped
+    command: >-
+      sh -c 'exec valkey-server --save "" --appendonly no
+      --maxmemory 256mb --maxmemory-policy allkeys-lru'
+    networks:
+      - immich-internal
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 320m
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+  immich-postgres:
+    # Immich's own image: PostgreSQL 14 with VectorChord and pgvector already
+    # built in. Do not substitute a plain postgres image -- the migrations create
+    # vector extensions and will fail without them.
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    container_name: homelab-immich-postgres
+    restart: unless-stopped
+    env_file:
+      - /etc/homelab/immich.env
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-immich}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE_NAME:-immich}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - /srv/homelab/appdata/immich/postgres:/var/lib/postgresql/data
+    networks:
+      - immich-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    stop_grace_period: 60s
+    shm_size: 256mb
+    deploy:
+      resources:
+        limits:
+          memory: 1536m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

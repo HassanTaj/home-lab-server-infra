@@ -1,0 +1,8 @@
+[Unit]
+Description=Synchronize edge VPS certificates for the homelab LAN edge
+Wants=network-online.target netbird.service
+After=network-online.target netbird.service
+
+[Service]
+Type=oneshot
+ExecStart=@REPO_ROOT@/operations/edge/sync-certificates.sh

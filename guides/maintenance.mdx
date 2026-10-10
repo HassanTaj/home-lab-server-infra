@@ -1,0 +1,400 @@
+---
+title: "Shutdown, reboot and hardware"
+description: "How to power the machine down safely, what to check when it comes back, and step-by-step procedures for the physical jobs like moving a disk or adding memory."
+---
+
+Everything here is a *planned* job. If something is broken right now, go to
+[Something's wrong](runbook) instead.
+
+<Note>
+**The golden rule for this machine:** always shut down with a command, never by
+holding the power button and never by pulling a cable. A clean shutdown unmounts
+the disks properly. An unclean one leaves the Windows-formatted data disk damaged
+and needing repair before it will mount again — that has already happened once
+here and cost hours.
+</Note>
+
+---
+
+## Shutting down safely
+
+```sh
+sudo systemctl poweroff
+```
+
+That's it. systemd stops Nextcloud, Jellyfin and the database in the right order,
+unmounts every disk, then powers off.
+
+<Accordion title="What actually happens, and why the order matters">
+Three containers hold the data disk open — Nextcloud, its cron helper, and
+Jellyfin. The disk cannot be unmounted while they're using it.
+
+`poweroff` handles this: systemd knows Nextcloud and Jellyfin depend on the
+mount, so it stops them first, *then* unmounts, *then* powers off. Pulling the
+plug skips all of that and leaves the filesystem mid-write.
+</Accordion>
+
+To reboot instead:
+
+```sh
+sudo systemctl reboot
+```
+
+<Warning>
+Don't unplug the data disk while the machine is running. If you must, stop the
+services that use it first:
+
+```sh
+sudo touch /etc/homelab/stack-hold
+sudo systemctl stop homelab-nextcloud homelab-media
+sudo systemctl stop 'mnt-data.mount'
+```
+
+Then unplug. Afterwards, start the mount and `sudo rm /etc/homelab/stack-hold`.
+</Warning>
+
+---
+
+## After any reboot
+
+Most of this happens by itself. The services are set to start at boot, and a
+watchdog checks every two minutes and starts anything it finds stopped. Usually
+you do nothing.
+
+To confirm all is well:
+
+<Steps>
+<Step title="Is the data disk there?">
+```sh
+sudo ./operations/storage/verify-disk.sh
+```
+Want: `data disk storage OK`. This checks the *right* disk is mounted — matching ID and
+marker file — not merely that a folder exists.
+</Step>
+
+<Step title="Are the services up?">
+```sh
+systemctl is-active homelab-{databases,nextcloud,management,media,immich,networking,landing,local-edge}.service
+```
+Want four × `active`. If Nextcloud and Jellyfin are the only ones down, the disk
+isn't mounted — go back to step 1.
+</Step>
+
+<Step title="Is everything actually healthy?">
+```sh
+sudo ./operations/tests/run-all.sh --host
+```
+Want `SUITE PASSED`.
+</Step>
+
+<Step title="Did backups survive?">
+```sh
+sudo ./operations/backups/status.sh
+```
+Read-only. Confirms the last backup and that the repository is reachable.
+</Step>
+</Steps>
+
+If services haven't come back after a few minutes, ask the watchdog why:
+
+```sh
+journalctl -u homelab-stack-watchdog.service -n 20
+```
+
+`waiting for the disk` means exactly that. `nothing to do` means it thinks
+everything is running.
+
+---
+
+## Moving the media disk from its USB case to an internal slot
+
+The media disk is a 2.5" drive in a USB enclosure. Taking it out and connecting it
+inside the laptop is worth doing — mostly for **reliability**, not speed.
+
+<Info>
+**Why it's worth it.** The service outage in this machine's history began with
+`usb 1-2: USB disconnect`, eight seconds after the laptop lid moved. An internal
+drive cannot be knocked loose. It also escapes the USB 2.0 bus, which caps
+transfers at roughly 35 MB/s.
+
+**Why not for raw speed.** The drive is a 5400 RPM spinning disk that tops out
+near 100–140 MB/s. Both SATA and data disk 3 are far faster than that, so the platter
+is the limit either way. Getting off data disk **2.0** is the real gain.
+</Info>
+
+<Warning>
+**Check there is a second bay before you commit.** Software can see two SATA
+ports, but whether the second has a physical bay is something only opening the
+case will tell you. This laptop shipped in different configurations.
+
+The existing bay holds the **system SSD** — everything the machine runs from, and
+all your live data. **Never displace it** to make room. If there's no genuine
+second bay (or a caddy-able optical bay), stop and use a USB 3.0 enclosure
+instead; you'll get the same speed with no disassembly.
+</Warning>
+
+<Steps>
+<Step title="Shut down cleanly">
+```sh
+sudo systemctl poweroff
+```
+This is what prevents filesystem damage. Wait for the machine to be fully off,
+then unplug the power.
+</Step>
+
+<Step title="Move the drive">
+Open the case, take the drive out of the USB enclosure, seat it in the second
+bay. Keep the enclosure — it's useful for the next disk.
+</Step>
+
+<Step title="Boot and confirm the disk is seen">
+```sh
+lsblk -o NAME,SIZE,MODEL,TRAN,ROTA
+```
+The drive should appear with `TRAN` now reading `sata` instead of `usb`. The
+device name may change from `sdb` to `sdc` — that's fine and doesn't matter.
+</Step>
+
+<Step title="Confirm the ID still resolves">
+```sh
+ls -l /dev/disk/by-uuid/DEMO_DATA_DISK_UUID
+```
+This must exist. It will.
+</Step>
+
+<Step title="Verify and check">
+```sh
+sudo ./operations/storage/verify-disk.sh
+sudo ./operations/tests/run-all.sh --host
+```
+Services return on their own within two minutes.
+</Step>
+</Steps>
+
+<Check>
+**Nothing needs reconfiguring.** Everything identifies this disk by its
+**filesystem ID**, not by where it's plugged in:
+
+- the mount unit uses `/dev/disk/by-uuid/DEMO_DATA_DISK_UUID`
+- `DATA_UUID` in `/etc/homelab/backup.env` holds the same value
+- no script anywhere hardcodes `/dev/sdb`
+
+That ID lives inside the filesystem, so moving the drive between a USB case and a
+SATA port doesn't change it. The mount unit simply works.
+</Check>
+
+### Tidy up afterwards
+
+Two cosmetic things become wrong once the disk is internal, neither urgent:
+
+- The mount unit still says *"the disk is external and may be absent"*. Reword it,
+  but **keep `nofail`** — a failed internal disk still shouldn't stop the machine
+  booting.
+- `x-gvfs-show` in the mount options exists to make the disk appear as removable
+  media in the desktop file manager. Pointless for an internal drive; harmless if
+  left.
+
+Both live in `operations/storage/systemd/mnt-data.mount.in`. After
+editing, apply with:
+
+```sh
+sudo ./operations/bootstrap/50-systemd.sh
+```
+
+---
+
+## Adding memory
+
+Check the host documentation for the supported memory type, capacity per slot,
+and maximum total capacity. Match speed and form factor; do not rely on a generic
+part recommendation for different hardware.
+
+After installing memory, verify what the operating system detects and check the
+services under representative load:
+
+```sh
+free -h
+sudo dmidecode -t memory | grep -E 'Size|Locator|Speed'
+sudo ./operations/tests/run-all.sh --host
+```
+## Before any risky change
+
+Whatever you're about to do — an upgrade, a disk job, editing configuration — do
+this first:
+
+```sh
+sudo ./operations/backups/status.sh                    # is the last backup good?
+sudo systemctl start homelab-backup-internal.service   # take a fresh one
+sudo touch /etc/homelab/stack-hold                     # stop the watchdog interfering
+```
+
+And afterwards:
+
+```sh
+sudo rm /etc/homelab/stack-hold
+sudo ./operations/tests/run-all.sh --host
+```
+
+<Tip>
+`stack-hold` matters more than it looks. The watchdog starts stopped services
+every two minutes. Without the hold, you stop something, turn away, and it comes
+back — and you conclude the machine is haunted.
+</Tip>
+
+---
+
+## Monthly upkeep
+
+Fifteen minutes, once a month. This is the difference between having backups and
+*believing* you have backups.
+
+```sh
+sudo ./operations/backups/check-repos.sh     # is the backup file itself healthy?
+sudo ./operations/restore/drill.sh           # can it actually give data back?
+sudo ./operations/tests/run-all.sh --host    # are all the safety rules still intact?
+```
+
+<Accordion title="Updating the software (do this deliberately, not casually)">
+Container versions are pinned on purpose — nothing updates itself. Updating is a
+decision you make, one service at a time:
+
+1. Take a backup and confirm it succeeded.
+2. Change **one** version number in the relevant file under `runtime/compose/`.
+3. Restart just that service and watch it start.
+4. Run `run-all.sh --host`.
+
+<Warning>
+**Never skip a Nextcloud major version.** Go 34 → 35 → 36, never 34 → 36. Skipping
+damages the database in ways that are hard to undo.
+
+**Never change the PostgreSQL major version by editing the tag.** Moving 18 → 19
+needs a proper migration, not a new image.
+</Warning>
+</Accordion>
+
+---
+
+## Moving the repository folder
+
+The service files contain the full path to this folder, so moving it breaks all of
+them at once. The fix is one command:
+
+```sh
+sudo touch /etc/homelab/stack-hold
+# … move the folder …
+sudo ./operations/bootstrap/50-systemd.sh     # rewrites every path
+sudo systemctl restart homelab-databases homelab-nextcloud homelab-management homelab-media
+sudo rm /etc/homelab/stack-hold
+sudo ./operations/tests/run-all.sh --host
+```
+
+---
+
+## Renaming a mountpoint
+
+Done once, on YYYY-MM-DD, when `/mnt/homelab-usb` became `/mnt/data`. Written
+down because it is far more invasive than it looks and the dangerous step is not
+the obvious one.
+
+<Warning>
+The dangerous step is `oc_storages.id`. Nextcloud derives a storage's identity
+from its `datadir`, and 512,279 `oc_filecache` rows hang off the storage's
+**numeric_id**. Change the datadir without updating the `id` string in the same
+transaction and Nextcloud sees a brand-new storage, orphans every indexed row,
+and re-scans a large library. Change `numeric_id` and you break the shares too.
+</Warning>
+
+<Steps>
+<Step title="Freeze the watchdog and take a database dump">
+```sh
+sudo systemctl stop homelab-stack-watchdog.timer
+sudo touch /etc/homelab/stack-hold
+docker exec homelab-postgres pg_dump -U <user> -d nextcloud --clean --if-exists | gzip > nextcloud-pre-rename.sql.gz
+```
+Stopping the **timer** is what actually protects you. The hold file is read only
+when a run starts, so a run already in flight ignores it.
+</Step>
+
+<Step title="Stop the disk's consumers and unmount">
+```sh
+sudo systemctl stop homelab-media.service homelab-nextcloud.service
+sudo fuser -vm /mnt/data          # GNOME Files holds a descriptor and blocks umount
+sudo pkill -x nautilus
+sudo systemctl stop mnt-data.automount mnt-data.mount
+```
+</Step>
+
+<Step title="Rename the units by FILENAME, not just Where=">
+systemd derives a mount unit's name from its path, so the filename must change
+too: `/mnt/data` requires `mnt-data.mount`. A `Where=` that disagrees with the
+filename is refused.
+```sh
+sudo systemctl disable mnt-<old>.automount
+sudo rm /etc/systemd/system/mnt-<old>.{mount,automount}
+# install the new pair, then:
+sudo systemctl daemon-reload && sudo systemctl enable --now mnt-data.automount
+```
+Remove the old mountpoint directory only once it is empty — if it is not, the
+old mount is still live.
+</Step>
+
+<Step title="Update the repo, then the live secrets">
+`RESTIC_REPO_INTERNAL` in `/etc/homelab/backup.env` contains the mountpoint. Miss
+it and every backup silently writes to a path that no longer exists.
+</Step>
+
+<Step title="Update Nextcloud in ONE transaction, while it is stopped">
+```sql
+BEGIN;
+UPDATE oc_external_config SET value='/mnt/data' WHERE mount_id=4 AND key='datadir';
+UPDATE oc_external_mounts SET mount_point='/Data' WHERE mount_id=4;
+UPDATE oc_storages SET id='local::/mnt/data/' WHERE numeric_id=5;   -- numeric_id UNCHANGED
+DELETE FROM oc_mounts WHERE mount_provider_class='OCA\Files_External\Config\ConfigAdapter';
+COMMIT;
+```
+`mount_point_hash` is **not** a plain digest of the path — md5, sha1 and sha256
+were all ruled out on YYYY-MM-DD. It cannot be recomputed in SQL. Delete the
+`ConfigAdapter` rows instead and let Nextcloud rebuild them, which it does on the
+next scan, preserving `storage_id`.
+</Step>
+
+<Step title="Bring it back and rebuild the derived rows">
+```sh
+sudo systemctl start homelab-nextcloud.service homelab-media.service
+docker exec -u www-data homelab-nextcloud php occ files:scan <owner> --shallow
+docker exec homelab-nextcloud-redis redis-cli -a <pw> FLUSHALL
+```
+A `Removed: 1` in the scan output is expected — the old mount point's folder stub
+in the home storage.
+</Step>
+
+<Step title="Verify before releasing the hold">
+```sh
+sudo ./operations/tests/test-fail-closed.sh     # all assertions
+sudo ./operations/backups/check-repos.sh        # Restic reachable at the new path
+```
+Compare `oc_filecache` counts against the dump you took. They must match exactly.
+```sh
+sudo rm /etc/homelab/stack-hold
+sudo systemctl start homelab-stack-watchdog.timer
+```
+</Step>
+</Steps>
+
+<CardGroup cols={2}>
+<Card title="Something's wrong" icon="triangle-exclamation" href="runbook">
+Unplanned problems: symptom, then fix.
+</Card>
+<Card title="Running without a desktop" icon="display" href="desktop">
+Free ~1 GB by booting to a console, and administer from a browser instead.
+</Card>
+<Card title="Every script explained" icon="terminal" href="scripts">
+All 31 scripts, what they do and when to run them.
+</Card>
+<Card title="Words you'll see" icon="book" href="glossary">
+Any unfamiliar term, in plain language.
+</Card>
+<Card title="How it works" icon="sitemap" href="architecture">
+Why the machine is built this way.
+</Card>
+</CardGroup>

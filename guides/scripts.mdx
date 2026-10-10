@@ -1,0 +1,643 @@
+---
+title: "Every script explained"
+description: "What each script does, the exact command to run, when you'd want it, and what it refuses to do."
+---
+
+There are 41 scripts. You will use about six of them regularly. This page covers
+all of them so nothing is a mystery, but start with the table.
+
+Every command runs from the repo folder, as administrator:
+
+```sh
+cd /srv/homelab-demo
+sudo ./operations/<folder>/<script>.sh
+```
+
+<Note>
+Unfamiliar words are explained in [the glossary](glossary). If you just want to
+fix something that's broken right now, go to [Something's wrong](runbook)
+instead.
+</Note>
+
+## Start here: what do you want to do?
+
+| I want to… | Run this |
+|---|---|
+| Check everything is healthy | [`tests/run-all.sh --host`](#run-all-sh--read-only) |
+| Check my backups are OK | [`backups/status.sh`](#status-sh--read-only) |
+| Back up right now | [`backups/backup-internal-to-disk.sh`](#backup-internal-to-disk-sh) |
+| Make files I copied in show up | [`storage/fix-share-permissions.sh`](#fix-share-permissions-sh) |
+| Run without the data disk | [`storage/nextcloud-degraded.sh`](#nextcloud-degraded-sh) |
+| Prove a backup really works | [`restore/drill.sh`](#drill-sh) |
+| Get a file back from a backup | [`restore/restore-files.sh`](#restore-files-sh) |
+| Fix services after moving the repo | [`bootstrap/50-systemd.sh`](#50-systemd-sh) |
+| Verify Pi-hole without changing my DNS | [`networking/verify-pihole.sh`](#verify-piholesh--read-only) |
+
+<Tip>
+Anything labelled **read-only** below changes nothing at all. When you're unsure
+what's going on, those are always safe to run.
+</Tip>
+
+## Conventions that apply to all of them
+
+Every script sources `operations/lib/common.sh`, which sets `set -Eeuo pipefail`
+and an `ERR` trap. That has three consequences worth knowing:
+
+- **They fail closed.** If a script can't *prove* it's safe to continue, it stops
+  instead of guessing. An error message is usually the system protecting your
+  data, not a bug. A script that fails has changed nothing it could avoid
+  changing.
+- **Secrets files are validated before use.** `load_env` refuses to read anything
+  in `/etc/homelab/` that is not `root:root` mode `0600`. Loosening permissions
+  on an env file breaks every script that reads it — deliberately.
+- **Storage work is serialised.** Backups, checks, restore drills and teardown
+  take `/run/homelab-storage.lock`, so two of them can never interleave.
+
+<Warning>
+Anything that deletes requires you to type a full confirmation phrase — never
+just `--yes` or `-f`. If a script asks you to type `REMOVE-LEGACY`, that is
+because it cannot be undone. Read the message before you type it.
+</Warning>
+
+---
+
+## Bootstrap — `operations/bootstrap/`
+
+Numbered for order. Run them in sequence on a fresh host; individually afterwards
+when something needs re-asserting. All are idempotent.
+
+### `00-preflight.sh` — read-only
+
+```sh
+sudo ./operations/bootstrap/00-preflight.sh
+```
+
+Verifies the host matches the assumptions in `guides/setup.mdx` before anything
+mutates. **Run it before any bootstrap step, and after any OS upgrade.** It
+changes nothing, so there is never a reason not to run it first.
+
+### `10-directories.sh`
+
+```sh
+sudo ./operations/bootstrap/10-directories.sh
+```
+
+Creates the host directory layout under `/srv/homelab/` with the right owners
+and modes. **Run once on a fresh host**, or if a directory was deleted by
+accident — it only creates what is missing.
+
+### `20-networks.sh`
+
+```sh
+sudo ./operations/bootstrap/20-networks.sh
+```
+
+Creates the shared `homelab-db` Docker network on a pinned subnet
+(`10.243.0.0/24`, chosen to avoid the ranges already in use).
+
+**When:** on a fresh host, or if `docker network ls` no longer shows
+`homelab-db`. Both the databases and nextcloud projects declare it
+`external: true`, so they will not start without it. `homelab-databases.service`
+also calls this as an `ExecStartPre`, so it self-heals in practice.
+
+### `30-secrets.sh`
+
+```sh
+sudo ./operations/bootstrap/30-secrets.sh
+sudo ./operations/bootstrap/30-secrets.sh --show    # print generated values ONCE
+```
+
+Installs env templates into `/etc/homelab/` as `root:root 0600` and generates
+strong random values for every `CHANGE_ME` placeholder you have not filled in.
+
+**Existing files are never overwritten.** That is the safety property: re-running
+it cannot clobber a working credential. Use `--show` on first run and put the
+output in a password manager — particularly `RESTIC_PASSWORD_INTERNAL`, because
+losing it makes the backup repository permanently unrecoverable.
+
+### `40-database-roles.sh`
+
+```sh
+sudo ./operations/bootstrap/40-database-roles.sh
+```
+
+Creates the least-privilege Nextcloud role and database inside the shared
+PostgreSQL instance, revokes `PUBLIC`, and resets the role password to match
+`/etc/homelab/databases.env`.
+
+**When:** after `30-secrets.sh`, after changing a database password, or when
+adding a new application's database — extend this script rather than creating
+roles by hand. `homelab-databases.service` runs it on every start, so drift
+between the env file and the actual role is corrected automatically.
+
+Requires `homelab-postgres` to be running; it aborts if not.
+
+### `50-systemd.sh`
+
+```sh
+sudo ./operations/bootstrap/50-systemd.sh
+```
+
+Renders every `*.in` unit template with the repo's absolute path, installs them
+to `/etc/systemd/system/`, and enables them. Units are **copied, not symlinked**,
+so moving the repo checkout cannot break a running system.
+
+**When:** after any change to a unit template, and — importantly — **after moving
+or renaming the repository directory**, because the rendered units contain
+absolute paths. It also retires `homelab-compose.service` if an old install still
+has it.
+
+It installs and enables but deliberately **does not start** anything. Start units
+yourself so the first start is observed.
+
+### `60-configure-nextcloud.sh`
+
+```sh
+sudo ./operations/bootstrap/60-configure-nextcloud.sh
+```
+
+Applies everything the Nextcloud image does not set reliably on an existing
+instance: reverse-proxy trust, Redis transactional locking, cron mode, mail, and
+the data disk-backed external storage.
+
+**When:** after first bringing Nextcloud up, and any time configuration drifts —
+after a major version upgrade, or if someone changed settings in the web UI.
+Idempotent and safe to re-run.
+
+### `stack-watchdog.sh`
+
+```sh
+sudo ./operations/bootstrap/stack-watchdog.sh          # normally the timer runs it
+sudo touch /etc/homelab/stack-hold                     # pause it
+sudo rm    /etc/homelab/stack-hold                     # resume
+```
+
+Starts any *enabled* stack unit it finds stopped. Driven by
+`homelab-stack-watchdog.timer` every two minutes; you rarely run it by hand
+except to see what it would do.
+
+It only ever calls `systemctl start` — never stop, restart or `down`. It skips
+units that are not enabled, so disabling a unit is respected, and it skips the
+disk-gated units while the disk is genuinely absent rather than spinning on a
+start that cannot succeed.
+
+**Always set `stack-hold` before maintenance** that involves stopping a unit or
+moving the repo, or the watchdog will restart things underneath you.
+
+---
+
+## Networking — `operations/networking/`
+
+### `install-secret.sh`
+
+```sh
+sudo ./operations/networking/install-secret.sh
+```
+
+Generates Pi-hole's dashboard password once at
+`/etc/homelab/pihole-web-password`, with owner `root:root` and mode `0600`. It
+never prints the password and never overwrites an existing valid file.
+
+### `check-prerequisites.sh` — read-only
+
+Waits for the exact LAN and NetBird addresses and refuses deployment if another
+process owns Pi-hole's planned bindings. Called automatically by
+`homelab-networking.service`; normally you do not run it yourself.
+
+### `verify-pihole.sh` — read-only
+
+```sh
+sudo ./operations/networking/verify-pihole.sh
+```
+
+Checks container health, all four local A records, UDP and TCP DNS, upstream
+forwarding, unchanged WAN provider/public resolution, the NetBird-only dashboard, and
+the query log. It queries Pi-hole directly and does not alter the host, router,
+or client DNS settings.
+
+---
+
+## Storage — `operations/storage/`
+
+### `verify-disk.sh` — read-only
+
+```sh
+sudo ./operations/storage/verify-disk.sh
+```
+
+Proves the data disk is genuinely mounted: correct mountpoint, matching filesystem
+UUID, and the marker file present. Exits non-zero otherwise.
+
+**When:** any time you are unsure, and automatically as an `ExecStartPre` on
+`homelab-nextcloud` and `homelab-media`. The marker check is the important one —
+if the disk is absent the mountpoint is an ordinary empty directory, and writing
+into it would silently fill the SSD instead.
+
+### `init-disk-layout.sh`
+
+```sh
+sudo ./operations/storage/init-disk-layout.sh
+```
+
+Creates the `.homelab/` area on the data filesystem and writes the marker file.
+Named with a leading dot so Nextcloud hides it, because the whole disk is exposed
+as external storage and the Restic repository inside must not be browsable.
+
+**When:** once per data disk, after mounting it for the first time. It only *adds*
+a hidden directory — it never formats the drive or deletes anything.
+
+### `fix-share-permissions.sh`
+
+```sh
+sudo ./operations/storage/fix-share-permissions.sh                 # whole share
+sudo ./operations/storage/fix-share-permissions.sh "My Folder"     # one subfolder
+sudo ./operations/storage/fix-share-permissions.sh --no-scan …     # permissions only
+```
+
+<Note>
+**Run this every single time you copy or move files into a share from a
+terminal.** It is safe to run repeatedly.
+</Note>
+
+Nextcloud runs as `www-data` (uid 33). Anything copied in as `root` or `admin`
+keeps the copier's ownership, and a `0770` directory grants nothing to "other" —
+so Nextcloud sees the folder name and is denied entry. Measured on this host, no
+copy command gets it right:
+
+| Method | Result | Visible in Nextcloud? |
+|---|---|---|
+| `mv` within one filesystem | `admin:admin drwxrwx---` | no |
+| `cp -a` / `rsync -a` | `admin:admin drwxrwx---` | no |
+| plain `cp -r` | `root:www-data drwxr-s---` | yes, but read-only |
+
+`mv` is the worst case and the most natural command to reach for: inside one
+filesystem it only relinks the inode, so no new file is created and the setgid bit
+on the parent never applies.
+
+The script chowns to `33:33`, sets directories `2770` and files `0660`, verifies
+`www-data` can genuinely read the result, then scans only the users who actually
+have the mount — discovered from its applicable groups, not hardcoded. It refuses
+any path outside `shared-internal`.
+
+Two scan errors reading `opendir(/mnt/data/.homelab): Permission denied` are
+**expected**: that is the Restic repository, root-owned `0700` on purpose so
+Nextcloud can neither read nor delete your backups.
+
+### `nextcloud-degraded.sh`
+
+```sh
+sudo ./operations/storage/nextcloud-degraded.sh --status
+sudo ./operations/storage/nextcloud-degraded.sh --on
+sudo ./operations/storage/nextcloud-degraded.sh --off
+```
+
+Runs Nextcloud **without** the data disk, for when it is dead, lost, or
+deliberately retired. Nearly all Nextcloud data is on the SSD; only the two data disk
+external storages need the disk, so a dead disk should not mean a total outage.
+
+`--off` runs `verify_data_mounted` first and refuses to leave degraded mode unless
+the genuine disk is back.
+
+**Why it is not just "unbind the disk":** if Nextcloud could still see
+`/mnt/data` as an *empty directory*, its scanner would treat every file there
+as deleted, purge them from `oc_filecache` — many rows as of an earlier deployment — and
+sync clients would delete the users' local copies. Two guards prevent that: the
+compose override binds a regular **file** over the path so the storage reports
+*unavailable* rather than *empty*, and the script repoints both data disk external
+storages at a non-existent path.
+
+Mode is a swap of which systemd unit is enabled, not a drop-in, because
+`RequiresMountsFor=` and `Requires=` are additive-only in systemd and cannot be
+cleared — verified the hard way.
+
+---
+
+## Media helpers — `operations/media/`
+
+### `sync-jellyfin-tutorial-libraries.sh`
+
+```sh
+sudo ./operations/media/sync-jellyfin-tutorial-libraries.sh
+sudo ./operations/media/sync-jellyfin-tutorial-libraries.sh --apply
+```
+
+Dry-run by default. It finds every immediate child of `/mnt/data/Tutorials`,
+creates a `musicvideos` library at `/media/Tutorials/<subject>`, ignores root ZIP
+files, and preserves every course folder below the subject. Existing libraries
+with the wrong path stop safely; nothing is deleted. An API key must be in
+`/etc/homelab/jellyfin-api-key` as `root:root` mode `0600`.
+
+### `sync-immich-folder-album.sh`
+
+```sh
+sudo ./operations/media/sync-immich-folder-album.sh
+sudo ./operations/media/sync-immich-folder-album.sh --apply
+```
+
+Dry-run by default. After an Immich external-library Scan, it finds all assets for
+the configured library, creates or updates the configured album, and removes stale
+memberships. It never moves or deletes source files. Configuration is kept in the
+root-only `/etc/homelab/immich-album-sync.env`; copy the tracked example and fill
+its API key, library ID, and album name.
+
+## Backups — `operations/backups/`
+
+### `status.sh` — read-only
+
+```sh
+sudo ./operations/backups/status.sh
+```
+
+Last successful run, repository age, free space, mount health. **The first thing
+to run when you want to know whether backups are healthy.** Changes nothing.
+
+### `backup-internal-to-disk.sh`
+
+```sh
+sudo systemctl start homelab-backup-internal.service   # preferred
+sudo ./operations/backups/backup-internal-to-disk.sh    # direct
+```
+
+Dumps every database, then Restic-backs-up `appdata`, `nextcloud-data`,
+`backup-staging` and `legacy-archive` to the encrypted repository on the data disk
+disk, verifies the new snapshot, then applies retention (7 daily / 4 weekly /
+6 monthly).
+
+Normally driven by `homelab-backup-internal.timer` at 02:30 daily. Run it by hand
+before anything risky — an upgrade, a teardown step, a disk operation.
+
+`appdata/postgres` is excluded on purpose: the logical dumps are the supported
+restore path, not a copy of a live cluster.
+
+**Not covered:** `shared-internal`, and the data disk's own folders. Anything that
+exists only there has no backup at all.
+
+### `pg-dump.sh`
+
+```sh
+sudo ./operations/backups/pg-dump.sh
+```
+
+Compressed logical dumps of every non-template database plus globals, into
+`/srv/homelab/backup-staging/`. Enumerates databases rather than hardcoding
+names, so a new application's database is picked up with no change here.
+
+Called by the backup job; run it directly when you want a dump right now — before
+a schema migration, for instance.
+
+### `check-repos.sh`
+
+```sh
+sudo ./operations/backups/check-repos.sh
+```
+
+Structural integrity check of the Restic repository, reading a sample of the
+actual data rather than just metadata.
+
+Driven weekly by `homelab-backup-check.timer` (Sunday 05:30). Run it by hand
+after any disk incident — an unclean unplug, a filesystem repair, a bad cable.
+
+---
+
+## Restore — `operations/restore/`
+
+<Check>
+All three are **safe to run on your live system**. None of them can overwrite
+anything: restores always land in a brand-new scratch folder, and you copy out
+what you need yourself.
+</Check>
+
+### `drill.sh`
+
+```sh
+sudo ./operations/restore/drill.sh
+```
+
+Proves the backups can actually give data back: restores a representative file,
+restores the Nextcloud database dump into an isolated scratch database, reports,
+then cleans up after itself.
+
+Driven monthly by `homelab-restore-drill.timer`. **Run it after any change to the
+backup configuration**, and before trusting a backup you have never restored.
+
+A drill that cannot complete is a backup failure, not a drill failure. Note
+`30-delete-old-nextcloud-data.sh` refuses to run unless the last drill succeeded.
+
+### `restore-files.sh`
+
+```sh
+sudo ./operations/restore/restore-files.sh internal
+sudo ./operations/restore/restore-files.sh internal <snapshot> <path>
+```
+
+Restores from the Restic repository into a fresh directory under
+`/srv/homelab/backup-staging/restore-<repo>-<timestamp>`. **Never restores in
+place**, so it cannot overwrite live data by accident. Copy what you need out of
+the scratch directory yourself.
+
+### `restore-database.sh`
+
+```sh
+sudo ./operations/restore/restore-database.sh <dump-file> [scratch-db-name]
+```
+
+Restores a dump into an **isolated scratch database**, created fresh. The live
+database is never touched. The scratch database is dropped only when you drop it,
+so you can inspect it at leisure.
+
+**When:** verifying a dump is good, recovering a single table, or checking what
+changed — never as a way to roll back production, which needs a deliberate
+maintenance window.
+
+---
+
+## Tests — `operations/tests/`
+
+### `run-all.sh` — read-only
+
+```sh
+sudo ./operations/tests/run-all.sh            # repo checks only
+sudo ./operations/tests/run-all.sh --host     # plus live host assertions
+```
+
+<Note>
+**This is the one to memorise.** Run it after any change, and before and after
+any maintenance. It aggregates all five checks below. You want `SUITE PASSED`.
+</Note>
+
+`--host` adds assertions against the running system; without it the checks are
+repo-only and safe on any machine.
+
+### `check-secrets.sh` — read-only
+
+Scans tracked files for credentials, private keys and API tokens, and asserts the
+`.gitignore` actually covers the paths it claims to. Runs its patterns against
+everything tracked *except itself* — the scanner necessarily contains the patterns
+it looks for, and scanning itself made the suite permanently red.
+
+### `check-shell.sh` — read-only
+
+`bash -n` on every script, plus `shellcheck` when installed.
+
+### `check-listeners.sh` — read-only, host
+
+Asserts no service listens on a wildcard or LAN address. The whole security model
+is that the homelab has no public listener and edge VPS Traefik is the only edge;
+this is what stops that eroding silently.
+
+### `test-fail-closed.sh` — read-only, host
+
+The most valuable test. Proves the safety properties still hold:
+
+- `verify-disk.sh` refuses an unmounted path, and refuses an empty tmpfs standing
+  in for the disk
+- Nextcloud and Jellyfin still carry both data disk gates
+- the databases and management units are still **independent** of the data disk
+- no `ExecStop` has drifted back to `down`
+- degraded mode is installed, has no data-disk dependency, declares `Conflicts=`, and
+  exactly one Nextcloud mode is enabled
+- Jellyfin's media mount is still read-only
+- the watchdog timer is enabled
+- a backup refuses a wrong `DATA_UUID`
+
+---
+
+## Teardown — `operations/teardown/`
+
+For retiring the pre-2026-08 legacy stack. **Mostly historical now** — the legacy
+containers, images and volumes are gone and `/srv/docker` was removed on
+an earlier deployment — but the scripts are kept as the record of what was authorised.
+
+Every one defaults to a dry run and requires an explicit confirmation phrase.
+None of them ever uses `docker system prune`.
+
+### `legacy-objects.sh` — source only, do not execute
+
+The explicit lists of containers, volumes, networks, images and paths that
+teardown may touch. Nothing outside these lists may ever be removed.
+
+### `legacy-inventory.sh` — read-only
+
+```sh
+sudo ./operations/teardown/legacy-inventory.sh
+```
+
+Reports the current state of every legacy object. Run before and after each
+teardown step and keep the output as evidence.
+
+### `10-stop-legacy.sh` — reversible
+
+```sh
+sudo ./operations/teardown/10-stop-legacy.sh --stop
+sudo ./operations/teardown/10-stop-legacy.sh --start   # rollback
+```
+
+Stops legacy containers without removing anything. Every container, volume,
+network, image and bind path survives.
+
+### `20-remove-legacy-objects.sh`
+
+<Warning>
+**Cannot be undone.** Removes containers and volumes permanently.
+</Warning>
+
+```sh
+sudo ./operations/teardown/20-remove-legacy-objects.sh                        # dry run
+sudo ./operations/teardown/20-remove-legacy-objects.sh --confirm REMOVE-LEGACY
+```
+
+Removes the named legacy objects. Refuses to run unless the new stack is verified
+running, and refuses to remove a container that is still running.
+
+### `30-delete-old-nextcloud-data.sh`
+
+<Warning>
+**Cannot be undone.** Deletes files permanently. It refuses to run unless a
+recent backup exists *and* a restore drill has passed — but once it runs, the
+files are gone.
+</Warning>
+
+```sh
+sudo ./operations/teardown/30-delete-old-nextcloud-data.sh                                       # dry run
+sudo ./operations/teardown/30-delete-old-nextcloud-data.sh --confirm DELETE-OLD-NEXTCLOUD-DATA
+```
+
+Deletes only two approved paths. Enforces every precondition: new stack running,
+a verified snapshot no more than two days old, and a **passing restore drill**.
+
+---
+
+## Monitoring — `operations/monitoring/`
+
+### `install-beszel.sh`
+
+```sh
+sudo BESZEL_VERSION=0.x.y ./operations/monitoring/install-beszel.sh
+```
+
+Installs Beszel as pinned host binaries under systemd, with upstream checksum
+verification. The version is required, not defaulted — an unpinned monitoring
+agent is an unreviewed binary.
+
+On this host only the **agent** runs, reporting to the existing hub on edge VPS,
+so there is no extra web listener here.
+
+### `install-cockpit.sh`
+
+```sh
+sudo ./operations/monitoring/install-cockpit.sh
+```
+
+Installs Cockpit from Ubuntu packages with a minimal module set, bound to the
+NetBird address only. Note there is deliberately **no** `cockpit.home.*` Traefik
+router — see `integrations/edge-vps/homelab.yml` for why sharing one Cockpit UI
+across hosts was rejected.
+
+---
+
+## Common sequences
+
+**Fresh host, start to finish**
+
+```sh
+sudo ./operations/tests/run-all.sh
+sudo ./operations/bootstrap/30-secrets.sh --show     # save the output
+#   fill in any remaining CHANGE_ME values in /etc/homelab/*.env
+sudo ./operations/bootstrap/00-preflight.sh
+sudo ./operations/bootstrap/10-directories.sh
+sudo ./operations/bootstrap/20-networks.sh
+sudo ./operations/bootstrap/50-systemd.sh
+sudo systemctl start 'mnt-data.mount'
+sudo ./operations/storage/init-disk-layout.sh
+sudo systemctl start 'mnt-storage.mount'
+sudo systemctl start homelab-databases homelab-networking homelab-landing homelab-immich homelab-management homelab-media homelab-nextcloud
+sudo systemctl start homelab-stack-watchdog.timer
+sudo ./operations/bootstrap/60-configure-nextcloud.sh
+sudo ./operations/tests/run-all.sh --host
+```
+
+**Before any risky change**
+
+```sh
+sudo ./operations/backups/status.sh
+sudo systemctl start homelab-backup-internal.service
+sudo touch /etc/homelab/stack-hold
+```
+
+**After moving or renaming the repository**
+
+```sh
+sudo touch /etc/homelab/stack-hold
+sudo ./operations/bootstrap/50-systemd.sh     # re-render absolute paths
+sudo systemctl restart homelab-databases homelab-nextcloud homelab-management homelab-media
+sudo rm /etc/homelab/stack-hold
+sudo ./operations/tests/run-all.sh --host
+```
+
+**Monthly upkeep**
+
+```sh
+sudo ./operations/backups/check-repos.sh
+sudo ./operations/restore/drill.sh
+sudo ./operations/tests/run-all.sh --host
+```
